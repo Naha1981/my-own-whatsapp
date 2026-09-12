@@ -51,14 +51,30 @@ accountsRouter.post('/:id/connect', asyncHandler(async (req, res) => {
   res.json({ waAccountId: account.id, status: 'connecting' });
 }));
 
-/** Poll while pairing; refresh at least every few seconds. */
+/**
+ * Poll every 2-3 seconds while pairing. QR responses are never cacheable so
+ * the dashboard cannot accidentally show an expired one-time QR.
+ */
 accountsRouter.get('/:id/qr', asyncHandler(async (req, res) => {
   const account = await getAccount(req.params.id);
   if (!account) {
     res.status(404).json({ error: 'NOT_FOUND' });
     return;
   }
-  res.json({ status: account.status, isConnected: account.is_connected, qrCode: account.qr_code });
+
+  res.setHeader('Cache-Control', 'no-store, max-age=0, must-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+
+  const expired = Boolean(account.qr_expires_at && new Date(account.qr_expires_at).getTime() <= Date.now());
+  res.json({
+    status: expired ? 'qr_expired' : account.status,
+    isConnected: account.is_connected,
+    qrCode: expired ? null : account.qr_code,
+    qrGeneratedAt: expired ? null : account.qr_generated_at,
+    qrExpiresAt: expired ? null : account.qr_expires_at,
+    qrPollIntervalMs: 3000,
+  });
 }));
 
 accountsRouter.get('/:id/status', asyncHandler(async (req, res) => {
