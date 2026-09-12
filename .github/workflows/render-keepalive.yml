@@ -2,35 +2,55 @@ name: Render keepalive
 
 on:
   schedule:
-    # Run every 10 minutes, deliberately offset from the top of the hour to
-    # reduce contention with the busiest scheduled-workflow window.
+    # Keep a 10-minute heartbeat, offset from common cron boundaries.
     - cron: '3/10 * * * *'
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   ping-render:
-    # The slim runner starts faster and is more than enough for one HTTP request.
-    runs-on: ubuntu-slim
-    timeout-minutes: 2
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
     steps:
-      - name: Wake and keep Render operator warm
+      - name: Ping Render operator
         env:
           RENDER_OPERATOR_URL: ${{ secrets.RENDER_OPERATOR_URL }}
+        shell: bash
         run: |
           set -euo pipefail
-          : "${RENDER_OPERATOR_URL:?Set RENDER_OPERATOR_URL in repository secrets}"
+
+          if [[ -z "${RENDER_OPERATOR_URL:-}" ]]; then
+            echo "ERROR: repository secret RENDER_OPERATOR_URL is not configured."
+            exit 1
+          fi
 
           url="${RENDER_OPERATOR_URL%/}/health?keepalive=$(date +%s)"
-          printf '[keepalive] GET %s\n' "$url"
+          echo "[keepalive] GET ${url}"
 
-          curl --fail --silent --show-error --location \
-            --retry 2 \
+          # Render may take a moment to wake after sleeping. Retry connection
+          # failures and transient HTTP failures without cancelling another run.
+          response="$(curl --silent --show-error --location \
+            --retry 5 \
             --retry-delay 5 \
-            --retry-connrefused \
-            --connect-timeout 10 \
-            --max-time 90 \
+            --retry-max-time 150 \
+            --connect-timeout 20 \
+            --max-time 60 \
+            --write-out '\n%{http_code}' \
             -H 'Cache-Control: no-cache' \
             -H 'Pragma: no-cache' \
-            "$url"
+            "${url}")"
 
-          printf '\n[keepalive] Render operator is reachable\n'
+          http_code="${response##*$'\n'}"
+          body="${response%$'\n'*}"
+
+          echo "[keepalive] HTTP ${http_code}"
+          echo "${body}"
+
+          if [[ "${http_code}" -lt 200 || "${http_code}" -ge 400 ]]; then
+            echo "ERROR: Render health endpoint returned HTTP ${http_code}."
+            exit 1
+          fi
+
+          echo "[keepalive] Render operator is reachable"
