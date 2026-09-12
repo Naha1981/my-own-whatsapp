@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>NahaLabs WhatsApp Operator Console</title>
+  <title>NahaLabs WhatsApp Setup</title>
   <style>
     :root { font-family: Inter, system-ui, sans-serif; color-scheme: light dark; }
     body { max-width: 1000px; margin: 0 auto; padding: 24px; line-height: 1.45; }
@@ -19,58 +19,57 @@
     #qr { width: min(340px,100%); aspect-ratio: 1; object-fit: contain; background:#fff; display:block; margin-top:12px; }
     .code { font: 700 30px/1.1 ui-monospace, SFMono-Regular, monospace; letter-spacing: 4px; margin-top: 10px; }
     .small { font-size: .9rem; }
+    .advanced { opacity: .8; }
   </style>
 </head>
 <body>
-  <h1>NahaLabs WhatsApp Operator</h1>
-  <div class="muted">Private operator test console. The API key stays in this browser tab and is not saved.</div>
+  <h1>NahaLabs WhatsApp Setup</h1>
+  <div class="muted">This screen is designed for non-technical setup. I will handle the application configuration automatically where possible.</div>
 
   <section>
-    <label>Operator API key
-      <input id="apiKey" type="password" autocomplete="off" placeholder="Paste OPERATOR_API_KEY">
+    <label>Operator access key
+      <input id="apiKey" type="password" autocomplete="off" placeholder="Your private Operator API key">
     </label>
-    <div class="row">
-      <button class="primary" onclick="loadAccounts()">Connect console</button>
-      <button onclick="clearKey()">Clear</button>
-    </div>
-    <div id="globalStatus" class="status">Not connected.</div>
+    <button class="primary" onclick="loadAccounts()">Start setup</button>
+    <button onclick="clearKey()">Clear</button>
+    <div id="globalStatus" class="status">Waiting for setup.</div>
   </section>
 
   <div class="grid" style="margin-top:16px">
     <section>
-      <h2>1. Account</h2>
+      <h2>1. WhatsApp account</h2>
       <label>Existing account
-        <select id="account" onchange="selectAccount()"><option value="">Connect console first</option></select>
+        <select id="account" onchange="selectAccount()"><option value="">Start setup first</option></select>
       </label>
-      <label>Label
-        <input id="label" placeholder="My business WhatsApp">
+      <label>Business label
+        <input id="label" value="NahaLabs WhatsApp" placeholder="Optional name for this WhatsApp number">
       </label>
-      <label>App ID
-        <input id="appId" placeholder="nahalabs-app">
-      </label>
-      <label>Tenant ID
-        <input id="tenantId" placeholder="tenant-1">
-      </label>
-      <label>Webhook URL
-        <input id="webhookUrl" placeholder="https://example.com/webhooks/whatsapp">
-      </label>
-      <button onclick="createAccount()">Create account</button>
-      <div id="accountResult" class="status">No account action yet.</div>
+      <div class="advanced">
+        <p class="small"><strong>Application setup is automatic.</strong> App ID and Tenant ID default to the NahaLabs account. You only need to change these later when another NahaLabs app needs a separate WhatsApp account.</p>
+        <div class="row">
+          <label>App ID<input id="appId" value="nahalabs"></label>
+          <label>Tenant ID<input id="tenantId" value="default"></label>
+        </div>
+        <label>Webhook URL (optional for initial connection)
+          <input id="webhookUrl" placeholder="Leave empty for now — I can wire this to your app later">
+        </label>
+      </div>
+      <button onclick="createAccount()">Create WhatsApp account</button>
+      <div id="accountResult" class="status">No account created yet.</div>
     </section>
 
     <section>
-      <h2>2. Connect</h2>
+      <h2>2. Connect the phone</h2>
+      <p>Choose QR pairing or phone-number pairing. The WhatsApp phone owner must approve the link on the phone; that is the one part that cannot safely be automated remotely.</p>
       <div class="row">
-        <button onclick="connectAccount()">Start QR pairing</button>
-        <button onclick="resetAccount()">Reset account</button>
+        <button onclick="connectAccount()">Start QR</button>
+        <button onclick="requestPairingCode()">Get phone code</button>
       </div>
-      <label>Phone number for pairing code
-        <input id="phoneNumber" inputmode="numeric" placeholder="27123456789">
+      <label>WhatsApp phone number for the phone-code method
+        <input id="phoneNumber" inputmode="numeric" placeholder="27XXXXXXXXX">
       </label>
-      <button onclick="requestPairingCode()">Generate pairing code (PIN)</button>
-      <button onclick="refreshPairingCode()">Refresh pairing code</button>
       <div id="pairing" class="status">No pairing code.</div>
-      <p class="small muted">On the business owner's phone: WhatsApp → Linked Devices → Link a device → Link with phone number instead → enter the code.</p>
+      <p class="small muted">Phone method: WhatsApp → Linked Devices → Link a device → Link with phone number instead → enter the code.</p>
     </section>
 
     <section>
@@ -81,19 +80,19 @@
     </section>
 
     <section>
-      <h2>4. Send test message</h2>
-      <label>Destination JID / phone
-        <input id="to" placeholder="27123456789@s.whatsapp.net">
+      <h2>4. Test messaging</h2>
+      <label>Destination phone / JID
+        <input id="to" placeholder="27XXXXXXXXX@s.whatsapp.net">
       </label>
       <label>Message
-        <textarea id="message" rows="5" placeholder="Hello from NahaLabs Operator"></textarea>
+        <textarea id="message" rows="5" placeholder="Hello from NahaLabs"></textarea>
       </label>
-      <button onclick="sendText()">Send text</button>
+      <button onclick="sendText()">Send test message</button>
       <div id="sendResult" class="status">No message sent.</div>
     </section>
 
     <section>
-      <h2>5. Live status</h2>
+      <h2>5. Connection status</h2>
       <button onclick="refreshStatus()">Refresh status</button>
       <button onclick="disconnectAccount()">Log out / disconnect</button>
       <div id="statusResult" class="status">No status loaded.</div>
@@ -109,10 +108,10 @@ function key() { return $('apiKey').value.trim(); }
 function accountId() { return $('account').value; }
 function scopeHeaders() {
   const h = {};
-  const appId = $('appId').value.trim();
-  const tenantId = $('tenantId').value.trim();
-  if (appId) h['X-App-Id'] = appId;
-  if (tenantId) h['X-Tenant-Id'] = tenantId;
+  const appId = $('appId').value.trim() || 'nahalabs';
+  const tenantId = $('tenantId').value.trim() || 'default';
+  h['X-App-Id'] = appId;
+  h['X-Tenant-Id'] = tenantId;
   return h;
 }
 function headers(json=false) {
@@ -128,28 +127,28 @@ async function api(path, options={}) {
   return data;
 }
 function show(id, value) { $(id).textContent = typeof value === 'string' ? value : JSON.stringify(value, null, 2); }
-function clearKey() { $('apiKey').value=''; accounts=[]; $('account').innerHTML='<option value="">Enter API key</option>'; show('globalStatus','Cleared.'); }
+function clearKey() { $('apiKey').value=''; accounts=[]; $('account').innerHTML='<option value="">Enter access key</option>'; show('globalStatus','Cleared.'); }
 async function loadAccounts() {
   try {
     const data = await api('/accounts'); accounts = data.accounts || [];
-    $('account').innerHTML = accounts.length ? accounts.map(a => `<option value="${a.waAccountId}">${a.label || '(unlabelled)'} — ${a.phoneNumber || 'not paired'} — ${a.status}</option>`).join('') : '<option value="">No accounts yet</option>';
+    $('account').innerHTML = accounts.length ? accounts.map(a => `<option value="${a.waAccountId}">${a.label || '(unlabelled)'} — ${a.phoneNumber || 'not paired'} — ${a.status}</option>`).join('') : '<option value="">No WhatsApp accounts yet</option>';
     if (accounts.length) selectAccount();
-    show('globalStatus', `Connected. ${accounts.length} account(s) visible. Enter the matching App ID and Tenant ID to operate an account.`);
-  } catch(e) { show('globalStatus', `Console error: ${e.message}`); }
+    show('globalStatus', `Connected to the Operator. ${accounts.length} account(s) visible. The App ID/Tenant ID have safe NahaLabs defaults.`);
+  } catch(e) { show('globalStatus', `Setup error: ${e.message}`); }
 }
 function selectAccount() { refreshStatus(); refreshPairingCode(); }
 async function createAccount() {
   try {
-    const data = await api('/accounts',{method:'POST',body:JSON.stringify({label:$('label').value.trim()||null,appId:$('appId').value.trim(),tenantId:$('tenantId').value.trim(),webhookUrl:$('webhookUrl').value.trim()})});
+    const data = await api('/accounts',{method:'POST',body:JSON.stringify({label:$('label').value.trim()||'NahaLabs WhatsApp',appId:$('appId').value.trim()||'nahalabs',tenantId:$('tenantId').value.trim()||'default',webhookUrl:$('webhookUrl').value.trim()||undefined})});
     show('accountResult',data); await loadAccounts(); $('account').value=data.waAccountId; selectAccount();
   } catch(e){ show('accountResult',`Error: ${e.message}`); }
 }
 async function connectAccount(){
-  if(!accountId()) return show('globalStatus','Select an account first.');
+  if(!accountId()) return show('globalStatus','Create or select a WhatsApp account first.');
   try { show('globalStatus',await api(`/accounts/${accountId()}/connect`,{method:'POST'})); startQrPolling(); } catch(e){ show('globalStatus',`Error: ${e.message}`); }
 }
 async function requestPairingCode(){
-  if(!accountId()) return show('pairing','Select an account first.');
+  if(!accountId()) return show('pairing','Create or select a WhatsApp account first.');
   try { const d=await api(`/accounts/${accountId()}/pairing-code`,{method:'POST',body:JSON.stringify({phoneNumber:$('phoneNumber').value.replace(/\D/g,'')})}); showPairing(d); } catch(e){ show('pairing',`Error: ${e.message}`); }
 }
 async function refreshPairingCode(){
@@ -179,8 +178,7 @@ async function refreshQr(){
 }
 async function refreshStatus(){ if(!accountId()) return; try{ show('statusResult',await api(`/accounts/${accountId()}/status`)); }catch(e){show('statusResult',`Error: ${e.message}`);} }
 async function disconnectAccount(){ if(!accountId()) return; if(!confirm('This logs out the WhatsApp account and clears its saved credentials. Continue?')) return; try{ show('statusResult',await api(`/accounts/${accountId()}/disconnect`,{method:'POST'})); await loadAccounts(); }catch(e){show('statusResult',`Error: ${e.message}`);} }
-async function resetAccount(){ if(!accountId()) return; if(!confirm('Reset this account to an unpaired state?')) return; try{ show('accountResult',await api(`/accounts/${accountId()}/reset`,{method:'POST'})); startQrPolling(); }catch(e){show('accountResult',`Error: ${e.message}`);} }
-async function sendText(){ if(!accountId()) return show('sendResult','Select an account first.'); try{ const d=await api('/send',{method:'POST',body:JSON.stringify({waAccountId:accountId(),type:'text',to:$('to').value.trim(),text:$('message').value})}); show('sendResult',d); }catch(e){show('sendResult',`Error: ${e.message}`);} }
+async function sendText(){ if(!accountId()) return show('sendResult','Create or select an account first.'); try{ const d=await api('/send',{method:'POST',body:JSON.stringify({waAccountId:accountId(),type:'text',to:$('to').value.trim(),text:$('message').value})}); show('sendResult',d); }catch(e){show('sendResult',`Error: ${e.message}`);} }
 </script>
 </body>
 </html>
