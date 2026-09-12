@@ -3,12 +3,15 @@ import { config } from '../config.js';
 import { pool } from '../db/pool.js';
 import { getActiveBindings, type WaBinding } from '../db/accounts.js';
 import { signPayload } from '../security/hmac.js';
+import { normalizeInboundMessage } from './normalize.js';
+import type { WAMessage } from '@whiskeysockets/baileys';
 
 const logger = pino({ level: config.logLevel });
 const MAX_ATTEMPTS = 3;
 
 export async function forwardInboundMessage(waAccountId: string, message: unknown): Promise<void> {
-  await forwardEvent(waAccountId, 'message', message);
+  const normalized = normalizeInboundMessage(message as WAMessage);
+  await forwardEvent(waAccountId, 'message', normalized);
 }
 
 /** Forward connection, call, receipt, reaction, presence, contact and group events through the same signed webhook. */
@@ -23,6 +26,7 @@ export async function forwardEvent(waAccountId: string, event: string, data: unk
   await Promise.all(
     bindings.map(async (binding) => {
       const payload = {
+        schemaVersion: 1,
         waAccountId,
         appId: binding.app_id,
         tenantId: binding.tenant_id,
@@ -50,6 +54,9 @@ async function deliverWithRetry(
         headers: {
           'Content-Type': 'application/json',
           'X-Webhook-Signature': signature,
+          'X-Webhook-Schema-Version': String(payload.schemaVersion ?? 1),
+          'X-Webhook-Event': String(payload.event ?? 'unknown'),
+          'X-WhatsApp-Account-Id': waAccountId,
         },
         body: JSON.stringify(payload),
       });
