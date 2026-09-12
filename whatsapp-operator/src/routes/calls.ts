@@ -1,10 +1,11 @@
 import { Router } from 'express';
 import { getSocket } from '../whatsapp/session-manager.js';
+import { requireAccountAccess } from '../middleware/account-access.js';
 
 export const callsRouter = Router();
 
 /** Reject an incoming WhatsApp call. Baileys does not provide a dependable Node-side voice/video call bridge. */
-callsRouter.post('/reject', async (req, res) => {
+callsRouter.post('/reject', requireAccountAccess((req) => String(req.body?.waAccountId ?? '') || undefined), async (req, res) => {
   const { waAccountId, callId, from } = req.body ?? {};
   if (!waAccountId || !callId || !from) {
     res.status(400).json({ error: 'VALIDATION_ERROR', message: 'waAccountId, callId and from are required' });
