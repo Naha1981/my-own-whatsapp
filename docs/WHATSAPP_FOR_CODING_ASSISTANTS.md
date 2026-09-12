@@ -1,67 +1,172 @@
-# NahaLabs WhatsApp — Coding Assistant Integration Guide
+# NahaLabs WhatsApp System — AI Coding Assistant Integration Manual
 
-## Purpose
+## 1. Purpose
 
-This document is the implementation contract for any NahaLabs application that needs WhatsApp functionality.
+This document is the implementation contract for any AI coding assistant, developer, or automation system integrating a NahaLabs application with the reusable NahaLabs WhatsApp Operator.
 
-The reusable transport is the self-hosted `whatsapp-operator/` service in this repository. Applications integrate with it over HTTPS and must keep business logic independent of Baileys.
+The Operator is the central WhatsApp transport service in this repository. NahaLabs applications call it over HTTPS. The Operator owns the WhatsApp Web/Baileys connection, QR/pairing flow, session persistence, outbound messaging, inbound event delivery, and low-level WhatsApp operations.
 
-This is the temporary transport strategy while applications are being validated. It is not the official Meta WhatsApp Business Platform and must not be described to customers as the official Meta API.
+**Core rule:** consuming applications must not create WhatsApp sockets or import Baileys. They integrate with the Operator API.
 
-## The architecture
+This architecture is intentionally provider-independent at the application/business layer so a future Meta Cloud API adapter can replace the current transport without rewriting CRM, support, ordering, booking, AI, or other domain logic.
+
+> This is a self-hosted WhatsApp Web transport. It is not the official Meta WhatsApp Business Platform. Do not describe it to customers as the Meta API, and do not use it for spam, bulk unsolicited messaging, or prohibited automation.
+
+## 2. Current central Operator
+
+Current Render service:
 
 ```text
-                         HTTPS + X-API-Key
-┌────────────────────┐  ───────────────────────▶  ┌──────────────────────────┐
-│ NahaLabs app       │                            │ WhatsApp Operator        │
-│                    │  ◀── signed webhooks ───── │                          │
-│ dashboard / AI /   │                            │ one Baileys socket/account│
-│ CRM / orders       │                            │ QR + pairing code         │
-└────────────────────┘                            │ reconnect / reset        │
-                                                  │ send / receive           │
-                                                  └───────────┬──────────────┘
-                                                              │
-                                                              ▼
-                                                     ┌─────────────────┐
-                                                     │ PostgreSQL      │
-                                                     │ credentials     │
-                                                     │ Signal keys     │
-                                                     │ accounts/binding│
-                                                     │ dead letters    │
-                                                     └─────────────────┘
+https://my-own-whatsapp-2z5h.onrender.com
 ```
 
-### Hard rule
+Operator console:
 
-**The application must not import `@whiskeysockets/baileys` and must not create a WhatsApp socket itself.**
+```text
+https://my-own-whatsapp-2z5h.onrender.com/operator-console
+```
 
-Only the Operator owns Baileys sockets. This prevents every application from becoming its own WhatsApp infrastructure service and makes the later move to Meta Cloud API much easier.
+Health endpoint:
 
-## What the coding assistant must do first
+```text
+GET /health
+```
 
-Before writing WhatsApp code in a new app:
+The current deployment is configured as a persistent Docker web service in Frankfurt. The service uses PostgreSQL for account, session, Signal-key, binding, control, blocklist, and webhook dead-letter persistence.
+
+Do not create another WhatsApp Operator for a new NahaLabs application unless there is a deliberate architectural reason to isolate infrastructure.
+
+## 3. Architecture
+
+```text
+┌──────────────────────────────┐
+│ NahaLabs application         │
+│                              │
+│ CRM / Support / Orders / AI  │
+│ Booking / Notifications      │
+│ Admin dashboard              │
+└──────────────┬───────────────┘
+               │ HTTPS
+               │ X-API-Key + tenant scope
+               ▼
+┌────────────────────────────────────────┐
+│ NahaLabs WhatsApp Operator             │
+│                                        │
+│ accounts / pairing / send / messages   │
+│ media / calls / reconnect / webhooks   │
+│                                        │
+│ one live socket per waAccountId         │
+└─────────────────────┬──────────────────┘
+                      │
+                      ▼
+              WhatsApp / Baileys
+                      │
+                      ▼
+              PostgreSQL persistence
+
+Inbound events travel in the opposite direction:
+
+WhatsApp → Operator → signed webhook → NahaLabs application
+```
+
+### Ownership boundaries
+
+**Operator owns:**
+
+- WhatsApp socket lifecycle.
+- QR generation and refresh.
+- Phone-number pairing codes.
+- WhatsApp authentication/session state.
+- Reconnection and connection status.
+- Sending WhatsApp messages.
+- WhatsApp message actions exposed by the API.
+- Media download from inbound WhatsApp messages.
+- Signed webhook delivery.
+
+**Application owns:**
+
+- User authentication.
+- Admin permissions.
+- Tenant authorization.
+- Customer/lead/order/booking/support data.
+- AI decisions and business rules.
+- Notification policy.
+- Message templates.
+- Scheduling/business events.
+- Idempotency for business actions.
+- Audit records.
+- Which WhatsApp account belongs to which tenant.
+
+## 4. What an AI coding assistant must do first
+
+Before making WhatsApp changes in any NahaLabs app:
 
 1. Read this document.
-2. Read `docs/WHATSAPP_OPERATOR_INTEGRATION.md`.
-3. Inspect the application repository to determine its existing auth, tenant model, webhook handling, and deployment model.
-4. Search for any existing WhatsApp provider before adding another integration.
-5. Reuse the existing transport boundary instead of creating a provider-specific business abstraction deep inside the application.
+2. Read `docs/WHATSAPP_OPERATOR_INTEGRATION.md` in this repository.
+3. Inspect the target application repository's authentication, tenant model, database, webhook system, and deployment configuration.
+4. Search for an existing WhatsApp integration before creating new code.
+5. Reuse the application's existing domain abstractions where possible.
+6. Add WhatsApp only at the transport/integration boundary.
+7. Run typecheck/build/tests before claiming the change works.
 
-Never add Evolution API, Twilio, Meta Cloud API, or another WhatsApp provider unless the user explicitly changes the provider decision.
+Never silently add a second WhatsApp provider.
 
-## Application environment
+Never import `@whiskeysockets/baileys` into a consuming application.
 
-The consuming app needs:
+Never hard-code the Operator API key into browser JavaScript.
 
-```bash
-OPERATOR_URL=https://your-whatsapp-operator.example.com
-OPERATOR_API_KEY=<same value as Operator>
-WEBHOOK_SECRET=<same value as Operator>
-APP_ID=your-app-slug
-APP_URL=https://your-app.example.com
+## 5. Multi-app and multi-tenant model
+
+The same central Operator can serve many NahaLabs applications.
+
+Each WhatsApp identity is represented by:
+
+```text
+waAccountId
 ```
 
-The Operator itself requires:
+A binding associates that WhatsApp identity with:
+
+```text
+appId
+ tenantId
+ webhookUrl
+```
+
+A single application can therefore have many tenants, and each tenant can have one or more WhatsApp identities depending on the application's business rules.
+
+### Recommended mapping
+
+```text
+NahaLabs App A
+  tenant_001 → waAccountId_A
+  tenant_002 → waAccountId_B
+
+NahaLabs App B
+  tenant_001 → waAccountId_C
+```
+
+The same tenant name across two applications does not imply shared authorization. `appId + tenantId + waAccountId` must still be resolved through the application's own authorization model.
+
+### Security rule
+
+Never trust a client-submitted `tenantId` or `waAccountId` as proof of access.
+
+A logged-in user must first be authorized by the consuming application's own database/session layer. Only then may the application call the Operator for the authorized account.
+
+## 6. Environment configuration
+
+A consuming application normally needs:
+
+```bash
+OPERATOR_URL=https://my-own-whatsapp-2z5h.onrender.com
+OPERATOR_API_KEY=<server-side secret matching the Operator>
+WEBHOOK_SECRET=<server-side secret matching the Operator>
+APP_ID=<stable application identifier>
+APP_URL=https://your-application.example.com
+```
+
+The Operator requires:
 
 ```bash
 DATABASE_URL=...
@@ -72,174 +177,120 @@ LOG_LEVEL=info
 NODE_ENV=production
 ```
 
-`OPERATOR_API_KEY` and `WEBHOOK_SECRET` must match byte-for-byte between the application and Operator.
+`OPERATOR_API_KEY` and `WEBHOOK_SECRET` are secrets. Keep them server-side only.
 
-Production webhook URLs must be public HTTPS endpoints. Do not configure `localhost` or `127.0.0.1` in production.
+Never expose either value through:
 
-## Business-owner pairing flow
+- frontend bundles;
+- `NEXT_PUBLIC_*` variables;
+- HTML source;
+- browser localStorage;
+- public API responses;
+- client-side logs.
 
-The intended user journey now offers **two choices**. Both methods use the same Operator socket and both end in the same `connected` state.
+Production webhook URLs must be public HTTPS URLs. Do not use `localhost` or `127.0.0.1` in production.
 
-```text
-Business owner opens your app
-        ↓
-Clicks “Connect WhatsApp”
-        ↓
-App creates/loads a waAccountId
-        ↓
-App calls POST /accounts/:id/connect
-        ↓
-Dashboard offers:
-   [ Scan QR ] OR [ Use phone number ]
-        |
-        +---- QR path ------------------------------+
-        |                                             |
-        | Operator generates QR                      |
-        | App polls GET /accounts/:id/qr             |
-        | Owner scans from own WhatsApp phone        |
-        |                                             |
-        +---- Pairing-code path ---------------------+
-                  Owner enters WhatsApp number
-                  App calls POST /accounts/:id/pairing-code
-                  Operator returns short-lived code
-                  Owner opens WhatsApp → Linked Devices
-                  → Link a device → Link with phone number instead
-                  → enters the code
-                         |
-                         v
-                Operator receives pairing
-                         |
-                         v
-              GET /accounts/:id/status
-                         |
-                         v
-                     connected
-```
+## 7. Authentication and scope headers
 
-The owner must complete the authorization from the **WhatsApp account they want to connect**. Typing a phone number into the website by itself does not authenticate the WhatsApp account.
-
-## Tenant and account model
-
-The Operator has a `waAccountId` for each connected WhatsApp identity.
-
-Each application maps that account to its own:
-
-- `appId`
-- `tenantId`
-- `webhookUrl`
-
-The application is responsible for authorizing which authenticated user/admin is allowed to operate which tenant and `waAccountId`.
-
-**Never trust a client-supplied tenant ID as authorization.** Resolve ownership from the application's authenticated user/session and database records first.
-
-## QR-code rules
-
-### Backend rules
-
-The Operator should:
-
-- generate QR codes from the current Baileys pairing value;
-- use explicit QR expiry/refresh behavior;
-- generate a sufficiently large PNG with a quiet zone;
-- use high error correction;
-- prevent caching of one-time QR images;
-- replace expired QR data rather than serving stale values;
-- clear the QR after successful connection;
-- log QR generation and pairing-success events;
-- avoid treating “QR generated” as evidence that WhatsApp accepted the pairing.
-
-### Frontend rules
-
-The consuming application should:
-
-- poll the QR/status endpoint every 2–5 seconds while pairing;
-- render the returned QR at an adequate physical size on desktop/mobile;
-- preserve the QR's white quiet zone;
-- never crop the QR tightly;
-- never blur, compress, recolor, overlay a logo on top of the code, or transform it with CSS filters;
-- disable aggressive browser/image caching for the QR;
-- stop showing the QR once `isConnected` becomes true;
-- show a “QR expired / refresh” state instead of asking the owner to scan an old image;
-- provide a reset/retry action for a failed pairing.
-
-## Phone-number pairing-code rules
-
-The Operator also supports WhatsApp Web phone-number pairing through `requestPairingCode(phoneNumber)`. The phone number must be supplied with its international country code; the Operator normalizes common formatting characters and validates an 8–15 digit result. citeturn203790search3turn203790search11
-
-Use:
+Protected Operator routes use:
 
 ```http
-POST /accounts/:id/pairing-code
 X-API-Key: <OPERATOR_API_KEY>
-Content-Type: application/json
 ```
 
-```json
-{
-  "phoneNumber": "+27 82 123 4567"
-}
-```
-
-Response includes:
-
-```json
-{
-  "status": "pairing_code_ready",
-  "pairingCode": "ABCD1234",
-  "pairingCodeDisplay": "ABCD-1234",
-  "expiresAt": "2026-09-12T07:01:00.000Z"
-}
-```
-
-The dashboard should display the code and tell the owner to use their own WhatsApp application:
-
-```text
-WhatsApp → Linked Devices → Link a device
-→ Link with phone number instead → enter the code
-```
-
-Implementation rules:
-
-- never ask for a WhatsApp password;
-- never treat the phone number alone as authentication;
-- never store the temporary pairing code in browser localStorage;
-- show its expiry time;
-- allow only one active pairing code per account;
-- after the code is entered on the phone, poll `/accounts/:id/status` until connected;
-- treat `pairing_code_ready` as pending, not proof of success;
-- use reset to start over when the owner wants to pair a different number or the session is broken.
-
-The Operator also exposes:
+The operator console also sends application scope headers:
 
 ```http
-GET /accounts/:id/pairing-code
+X-App-Id: <appId>
+X-Tenant-Id: <tenantId>
 ```
 
-for recovering the currently active short-lived code. Responses are non-cacheable.
+Consuming applications should keep the Operator key on their server and proxy/mediate privileged actions rather than exposing the key to browsers.
 
-## Important diagnostic distinction
+## 8. First-time WhatsApp pairing flow
 
-A QR or pairing code can be generated successfully while WhatsApp still refuses the device link. The meaningful diagnostic signal is the successful pairing/connection path, not merely receiving a code.
+The Operator supports two pairing methods.
 
-For troubleshooting, inspect the Operator logs for:
+### QR flow
 
 ```text
-WhatsApp QR generated
-WhatsApp pairing code generated
-WhatsApp pairing success received
-WhatsApp connected
-WhatsApp connection closed
+Application
+   ↓
+POST /accounts/:id/connect
+   ↓
+Operator starts WhatsApp session
+   ↓
+GET /accounts/:id/qr every ~3 seconds
+   ↓
+Display fresh QR
+   ↓
+Business owner scans with WhatsApp → Linked Devices → Link a device
+   ↓
+GET /accounts/:id/status
+   ↓
+status=connected / isConnected=true
 ```
 
-## API usage
+### Phone-number pairing-code flow
 
-### Create a WhatsApp account
+```text
+Application
+   ↓
+POST /accounts/:id/pairing-code
+   ↓
+Operator returns short-lived code
+   ↓
+Business owner opens WhatsApp
+   ↓
+Linked Devices → Link a device → Link with phone number instead
+   ↓
+Owner enters the code
+   ↓
+Application polls /status
+   ↓
+connected
+```
+
+A phone number typed into the website is not, by itself, authentication. The business owner must authorize the link from the actual WhatsApp account they want to connect.
+
+## 9. Account API
+
+All routes below require the Operator API key.
+
+### Health
+
+```http
+GET /health
+```
+
+No API key required.
+
+### Bootstrap a beginner-friendly account
+
+```http
+POST /accounts/bootstrap
+```
+
+Example:
+
+```json
+{
+  "label": "NahaLabs WhatsApp",
+  "appId": "my-app",
+  "tenantId": "tenant_123",
+  "webhookUrl": "https://my-app.example.com/api/webhooks/whatsapp"
+}
+```
+
+The Operator reuses an existing account already bound to the requested `appId + tenantId`, otherwise it creates one, creates the binding, and starts the session.
+
+### Create an account explicitly
 
 ```http
 POST /accounts
-X-API-Key: <OPERATOR_API_KEY>
-Content-Type: application/json
 ```
+
+Example:
 
 ```json
 {
@@ -250,21 +301,82 @@ Content-Type: application/json
 }
 ```
 
-### Start the WhatsApp session
+The webhook may be omitted during first-time pairing and configured later.
+
+### List accounts
+
+```http
+GET /accounts
+```
+
+Returns account identifiers, labels, phone numbers, status, and connection state.
+
+### Start/restart connection
 
 ```http
 POST /accounts/:id/connect
-X-API-Key: <OPERATOR_API_KEY>
 ```
 
-Then choose either the QR flow or the pairing-code flow above.
+### Get QR state
 
-### Check connection status
+```http
+GET /accounts/:id/qr
+```
+
+The response includes fields such as:
+
+```json
+{
+  "status": "qr_ready",
+  "isConnected": false,
+  "qrCode": "data:image/png;base64,...",
+  "qrGeneratedAt": "...",
+  "qrExpiresAt": "...",
+  "qrImageUrl": "/accounts/<id>/qr.png",
+  "qrPollIntervalMs": 3000
+}
+```
+
+QR responses are explicitly non-cacheable.
+
+### Get QR PNG
+
+```http
+GET /accounts/:id/qr.png
+```
+
+Useful when a frontend wants an `<img>` endpoint instead of a data URL.
+
+### Get pairing code
+
+```http
+GET /accounts/:id/pairing-code
+```
+
+### Request pairing code
+
+```http
+POST /accounts/:id/pairing-code
+Content-Type: application/json
+```
+
+Example:
+
+```json
+{
+  "phoneNumber": "+27 82 123 4567"
+}
+```
+
+The number must be provided in international format. Pairing codes are temporary.
+
+### Connection status
 
 ```http
 GET /accounts/:id/status
-X-API-Key: <OPERATOR_API_KEY>
 ```
+
+Typical successful result:
 
 ```json
 {
@@ -275,230 +387,886 @@ X-API-Key: <OPERATOR_API_KEY>
 }
 ```
 
-### Reset a pairing/session
-
-```http
-POST /accounts/:id/reset
-X-API-Key: <OPERATOR_API_KEY>
-```
-
-Use this when:
-
-- the owner deliberately wants to link a different WhatsApp number;
-- the session is corrupted;
-- the Operator reports a terminal bad-session condition;
-- pairing must start from a clean state.
-
-Reset deletes persisted Baileys credentials and Signal keys and returns the account to `pending`.
-
 ### Disconnect
 
 ```http
 POST /accounts/:id/disconnect
-X-API-Key: <OPERATOR_API_KEY>
 ```
 
-This intentionally logs out and clears persisted auth so the next connection is a clean pairing.
+This intentionally logs the WhatsApp account out and clears its saved credentials.
 
-### Send a message
+### Reset
+
+```http
+POST /accounts/:id/reset
+```
+
+Use when a fresh clean pairing is intentionally required, for example after a terminal/bad session or when linking a different WhatsApp number.
+
+Do not automatically reset every transient disconnect.
+
+## 10. Outbound WhatsApp messaging
+
+Primary endpoint:
 
 ```http
 POST /send
-X-API-Key: <OPERATOR_API_KEY>
-Content-Type: application/json
 ```
+
+Example text message:
 
 ```json
 {
   "waAccountId": "uuid",
   "to": "27821234567",
+  "type": "text",
   "text": "Your order is confirmed."
 }
 ```
 
-## Webhook contract
+Recipients may be supplied as a phone number or a WhatsApp JID. Phone numbers are normalized into `@s.whatsapp.net`; group JIDs using `@g.us` are accepted.
 
-The Operator sends inbound WhatsApp messages to the binding's `webhookUrl`.
+### Currently supported outbound types
 
-```http
-POST /api/webhooks/whatsapp
-Content-Type: application/json
-X-Webhook-Signature: <hex HMAC-SHA256>
-```
+The Operator currently supports these `type` values:
 
-Payload shape:
+| Type | Main fields |
+|---|---|
+| `text` | `text` |
+| `image` | `url`, optional `caption` |
+| `video` | `url`, optional `caption`, `gifPlayback`, `ptv` |
+| `audio` | `url`, optional `mimetype`, `ptt` |
+| `document` | `url`, `fileName`, optional `mimetype`, `caption` |
+| `sticker` | `url` |
+| `location` | `latitude`, `longitude`, optional `name`, `address` |
+| `contact` | `displayName`, `vcard` |
+| `poll` | `name`, `values`, `selectableCount` |
+| `reaction` | `text`, referenced message key fields |
+
+Quoted/replied messages can be supplied with a `quotedMessage` object where supported by the endpoint.
+
+### Example image
 
 ```json
 {
   "waAccountId": "uuid",
-  "appId": "acme",
+  "to": "27821234567",
+  "type": "image",
+  "url": "https://cdn.example.com/catalog/item-123.jpg",
+  "caption": "Your requested item"
+}
+```
+
+### Example document
+
+```json
+{
+  "waAccountId": "uuid",
+  "to": "27821234567",
+  "type": "document",
+  "url": "https://cdn.example.com/invoices/INV-1001.pdf",
+  "fileName": "INV-1001.pdf",
+  "mimetype": "application/pdf",
+  "caption": "Your invoice"
+}
+```
+
+### Example location
+
+```json
+{
+  "waAccountId": "uuid",
+  "to": "27821234567",
+  "type": "location",
+  "latitude": -26.10,
+  "longitude": 28.24,
+  "name": "NahaLabs Store",
+  "address": "Example Road"
+}
+```
+
+Do not place domain rules such as “send invoice” or “reply to lead” directly inside the transport adapter. Those decisions belong in the application.
+
+## 11. Message operations
+
+The Operator exposes message actions through `/messages`.
+
+### Mark messages read
+
+```http
+POST /messages/read
+```
+
+### Presence
+
+```http
+POST /messages/presence
+```
+
+Allowed values:
+
+```text
+available
+unavailable
+composing
+recording
+paused
+```
+
+### Edit a message
+
+```http
+POST /messages/edit
+```
+
+### Delete a message
+
+```http
+POST /messages/delete
+```
+
+Use these only when the application's UX and business rules justify them. Do not build critical business state around WhatsApp read/presence behavior.
+
+## 12. Inbound webhooks
+
+The Operator forwards inbound events to the active binding's `webhookUrl`.
+
+Request headers include:
+
+```http
+Content-Type: application/json
+X-Webhook-Signature: <hex HMAC-SHA256>
+X-Webhook-Schema-Version: 1
+X-Webhook-Event: message
+X-WhatsApp-Account-Id: <waAccountId>
+```
+
+Payload structure:
+
+```json
+{
+  "schemaVersion": 1,
+  "waAccountId": "uuid",
+  "appId": "my-app",
   "tenantId": "tenant_123",
-  "message": { "...": "raw Baileys WAMessage object" },
+  "event": "message",
+  "data": {},
   "deliveredAt": "2026-09-12T00:00:00.000Z"
 }
 ```
 
 The signature is HMAC-SHA256 using `WEBHOOK_SECRET` over the exact JSON payload.
 
-The receiving application must verify the signature **before** processing the message.
+### Important receiver rule
 
-## Inbound message processing
+Verify the signature **before** doing business logic.
 
-The application's webhook handler should:
+Do not trust the `tenantId` from an unsigned request or a request with an invalid signature.
 
-1. Verify the HMAC signature.
-2. Resolve the tenant/account from trusted application-side binding data.
-3. De-duplicate the message using a stable WhatsApp message ID before triggering business logic.
-4. Apply application safety/opt-out rules.
-5. Pass the message to the domain layer (CRM, AI assistant, orders, support inbox, etc.).
-6. Persist the business result independently of the WhatsApp transport.
-7. Reply through the transport abstraction rather than calling Baileys directly.
+## 13. Normalized inbound message
 
-## Transport abstraction
+For `event = message`, `data` includes a normalized representation such as:
 
-Applications should hide the provider behind a small interface:
-
-```ts
-export interface WhatsAppTransport {
-  connect(accountId: string): Promise<void>;
-  requestPairingCode(accountId: string, phoneNumber: string): Promise<unknown>;
-  getStatus(accountId: string): Promise<unknown>;
-  reset(accountId: string): Promise<void>;
-  send(accountId: string, to: string, text: string): Promise<void>;
+```json
+{
+  "provider": "whatsapp-web",
+  "messageId": "...",
+  "chatId": "...",
+  "senderId": "...",
+  "fromMe": false,
+  "pushName": "Customer name",
+  "timestamp": 1750000000,
+  "messageType": "conversation",
+  "text": "Hello",
+  "media": null,
+  "quotedMessageId": null,
+  "quotedParticipant": null,
+  "rawMessage": {}
 }
 ```
 
-Business logic should depend on `WhatsAppTransport`, not on Baileys.
+The normalized fields are the preferred application integration surface. Keep the raw Baileys message only where a transport-specific feature genuinely needs it.
 
-That is the migration seam for the future Meta Cloud API provider.
+## 14. Webhook events
 
-## Reconnect behavior
+The Operator can forward message and other WhatsApp-side events through the same signed webhook mechanism, including connection, call, receipt, reaction, presence, contact, and group related events.
 
-Coding assistants must not “fix” every disconnect by deleting credentials.
+Applications should switch behavior using the `event` field instead of trying to infer event type from random raw payload fields.
 
-The Operator follows this model:
+## 15. Webhook retry and dead letters
 
-- ordinary transient disconnect → reconnect and keep credentials;
-- `loggedOut` → clear credentials and require a new pairing;
-- bad-session / status 500 → clear credentials and start a clean session;
-- connection replaced elsewhere → do not create a reconnect loop;
-- stale socket close → must never delete a newer live socket.
+The Operator retries webhook delivery up to 3 attempts.
 
-## Version and browser rules
-
-The Operator resolves a WhatsApp Web revision before socket creation and logs the chosen revision. The live WhatsApp Web revision is preferred, with the Baileys version helper as fallback.
-
-Do not hard-code a guessed WhatsApp protocol revision in application code.
-
-Do not add random browser fingerprints to “make it work”. Keep the Operator's configured browser identity consistent unless evidence shows a compatibility issue.
-
-## Deployment rules
-
-The Operator must run as a persistent Node process or equivalent long-lived container. Do not move Baileys into a serverless or edge function.
-
-For the current architecture:
-
-- one Operator process owns the account sockets;
-- PostgreSQL is shared by the Operator and its persistence layer;
-- scale vertically unless cross-instance socket ownership/locking is introduced;
-- Render/Docker configuration must deploy the `whatsapp-operator` directory as the persistent service.
-
-## Testing checklist for every WhatsApp-enabled app
-
-### Before merging
-
-- [ ] No direct Baileys import in the application.
-- [ ] Operator URL and shared secrets are configured.
-- [ ] Tenant authorization prevents cross-tenant `waAccountId` access.
-- [ ] Connect flow creates or selects exactly one account identity.
-- [ ] User is offered both QR and phone-number pairing code when both are supported by the UI.
-- [ ] QR polling is faster than QR refresh/expiry.
-- [ ] QR is rendered without cropping or visual transformations.
-- [ ] Expired QR is replaced instead of reused.
-- [ ] Pairing codes are not persisted in browser storage.
-- [ ] Connected state removes pairing UI.
-- [ ] Webhook signature verification is tested.
-- [ ] Duplicate inbound messages do not double-trigger business actions.
-- [ ] Send failures are surfaced to the application.
-- [ ] Reset starts a fresh pairing flow.
-
-### Failure-path tests
-
-Test at least:
-
-- Operator unavailable.
-- Wrong API key.
-- Missing webhook secret.
-- Invalid webhook signature.
-- Expired QR.
-- Expired pairing code.
-- QR scanned but pairing not completed.
-- Pairing code entered but pairing not completed.
-- WhatsApp session replaced on another device.
-- transient socket disconnect.
-- logged-out session.
-- bad session / status 500.
-- webhook timeout.
-- webhook 500 after retry.
-- duplicate message delivery.
-- unauthorized tenant attempting to use another tenant's account.
-
-## Troubleshooting pairing
-
-Follow this order and do not skip directly to code changes:
-
-1. Confirm the deployed Operator commit is the expected commit.
-2. Confirm the Operator is actually running.
-3. For QR: confirm the QR is changing and is not being cached.
-4. For QR: confirm the QR decodes programmatically as a valid Baileys pairing string.
-5. Use the owner's real WhatsApp phone via Linked Devices.
-6. For phone pairing: verify the entered number includes the country code and is the same WhatsApp account the owner is authorizing.
-7. Search Operator logs for `WhatsApp pairing success received` and `WhatsApp connected`.
-8. If pairing-success exists, debug persistence/status/dashboard reporting.
-9. If pairing-success never appears across full QR/code attempts, inspect the close status and account/number trust before changing QR rendering code.
-10. Try a different clean WhatsApp number if the evidence points to WhatsApp refusing the link.
-
-## What not to put in an application
-
-Do not add:
-
-- Meta API tokens unless the user explicitly requests the official provider migration;
-- Twilio credentials;
-- Evolution API URLs or dependencies;
-- Baileys session files on local disk;
-- client-side copies of `OPERATOR_API_KEY` unless there is an explicit secure server-side proxy design;
-- webhook secrets in browser code;
-- pairing codes in long-lived browser storage;
-- long-lived QR values in localStorage;
-- guessed WhatsApp protocol versions;
-- provider-specific code in core business/domain modules.
-
-## Migration to Meta later
-
-The application should be designed so the future migration changes only the transport layer.
-
-Current path:
+Retry timing is approximately:
 
 ```text
-Application domain
+attempt 1 → immediate
+attempt 2 → ~1 second later
+attempt 3 → ~2 seconds later
+```
+
+After the final failure, the event is persisted in the `wa_webhook_dead_letters` table.
+
+Therefore, application webhook handlers should still be idempotent. A successful HTTP response should mean the application accepted the event for processing.
+
+Recommended pattern:
+
+```text
+Webhook request
+   ↓
+Verify signature
+   ↓
+Check message/event idempotency key
+   ↓
+Persist/queue event
+   ↓
+Return 2xx quickly
+   ↓
+Process business logic asynchronously
+```
+
+Do not perform long-running AI generation or external API calls before acknowledging a webhook if the application can use a queue/job worker instead.
+
+## 16. Inbound media
+
+For inbound media, the normalized event identifies media metadata such as mimetype, filename, and caption.
+
+The application may retrieve the actual media using:
+
+```http
+POST /media/download
+```
+
+Example:
+
+```json
+{
+  "waAccountId": "uuid",
+  "message": { "raw WhatsApp message object" }
+}
+```
+
+The Operator returns the media bytes with the detected MIME type and an appropriate filename where available.
+
+Applications should normally stream/store media into their own object storage rather than keeping large media blobs in the application database.
+
+## 17. Call handling
+
+The Operator currently exposes:
+
+```http
+POST /calls/reject
+```
+
+This is for rejecting an incoming WhatsApp call.
+
+Do not assume the Operator provides a reliable Node-side voice/video bridge. The current implementation intentionally does not promise a full WhatsApp voice/video calling platform.
+
+## 18. Automation possibilities
+
+The WhatsApp Operator is the transport layer. **Automations are normally implemented in the consuming application.**
+
+The following are valid application-level automation patterns.
+
+### AI customer support
+
+```text
+Incoming WhatsApp message
+   ↓
+Signed webhook
+   ↓
+Identify tenant + customer
+   ↓
+Load conversation/history
+   ↓
+AI classification / response generation
+   ↓
+Safety + permission checks
+   ↓
+POST /send
+   ↓
+Persist response
+```
+
+Possible behaviors:
+
+- answer FAQs;
+- qualify leads;
+- ask follow-up questions;
+- search a product catalog;
+- check order status;
+- summarize conversations;
+- route to a human agent;
+- detect urgency/sentiment;
+- hand off to a specialist queue.
+
+### Human handoff
+
+```text
+AI conversation
+   ↓
+Escalation rule triggered
+   ↓
+Set tenant/customer to human mode
+   ↓
+Notify support dashboard
+   ↓
+Stop automatic AI replies
+```
+
+The Operator already has application-level controls in the database for AI/manual behavior. Do not bypass these controls with a second hidden automation path.
+
+### Lead capture
+
+```text
+"Hi"
+ ↓
+Create/update lead
+ ↓
+Ask qualification questions
+ ↓
+Store answers
+ ↓
+Assign salesperson
+ ↓
+Send confirmation
+```
+
+### Booking automation
+
+```text
+Customer asks for appointment
+ ↓
+Application checks calendar
+ ↓
+Offer available slots
+ ↓
+Customer selects slot
+ ↓
+Create booking
+ ↓
+Send confirmation
+ ↓
+Schedule reminder
+```
+
+The reminder scheduler belongs to the application/job system, not to the WhatsApp Operator itself.
+
+### Order automation
+
+```text
+Order paid
+ ↓
+Application event/queue
+ ↓
+Generate customer message
+ ↓
+POST /send
+```
+
+Examples:
+
+- order received;
+- payment confirmed;
+- invoice ready;
+- packed;
+- shipped;
+- out for delivery;
+- delivered;
+- refund processed.
+
+### Appointment reminders
+
+Use application scheduling/cron/workers:
+
+```text
+Booking database
+ ↓
+Scheduler/worker
+ ↓
+Select due reminders
+ ↓
+POST /send
+ ↓
+Record delivery result
+```
+
+### Customer re-engagement
+
+Allowed only when consistent with the application's permissions, customer expectations, applicable rules, and WhatsApp restrictions. Do not implement unsolicited bulk messaging.
+
+### Internal alerts
+
+A NahaLabs application can use WhatsApp to notify authorized staff about:
+
+- new orders;
+- new leads;
+- failed payments;
+- support escalations;
+- important bookings;
+- operational incidents.
+
+### Media automation
+
+An application can receive a customer photo/document, download it through `/media/download`, process it, store it, and send a result back through `/send`.
+
+Examples:
+
+- proof-of-payment intake;
+- product photo analysis;
+- document collection;
+- support attachments;
+- delivery proof;
+- invoice/receipt sending.
+
+### CRM synchronization
+
+```text
+WhatsApp message
+ ↓
+Webhook
+ ↓
+Find/create CRM contact
+ ↓
+Append timeline event
+ ↓
+Run automation
+```
+
+Never use the WhatsApp account itself as the source of truth for customer records. The application database remains authoritative.
+
+### AI agent tools
+
+An AI assistant can use the application as a tool layer:
+
+```text
+WhatsApp
+ ↓
+AI assistant
+ ├─ customer lookup
+ ├─ order lookup
+ ├─ stock lookup
+ ├─ booking lookup
+ ├─ invoice creation
+ ├─ support ticket creation
+ └─ WhatsApp reply through Operator
+```
+
+The AI should call business-domain tools and then use the Operator only for the communication action.
+
+## 19. Recommended application architecture
+
+Use a small transport adapter:
+
+```ts
+export interface WhatsAppTransport {
+  bootstrap(input: BootstrapInput): Promise<BootstrapResult>;
+  connect(accountId: string): Promise<void>;
+  getQr(accountId: string): Promise<QrResult>;
+  requestPairingCode(accountId: string, phoneNumber: string): Promise<PairingResult>;
+  getStatus(accountId: string): Promise<StatusResult>;
+  reset(accountId: string): Promise<void>;
+  disconnect(accountId: string): Promise<void>;
+  send(message: OutboundWhatsAppMessage): Promise<SendResult>;
+}
+```
+
+Implementation:
+
+```text
+Domain / Application services
+            ↓
+      WhatsAppTransport
+            ↓
+ NahaLabs Operator HTTP adapter
+```
+
+Do not make the domain layer import Operator-specific HTTP code directly in dozens of files.
+
+## 20. Browser/admin UI rules
+
+For an admin dashboard that lets a user connect WhatsApp:
+
+- keep the Operator API key on the server;
+- let the authenticated user trigger a server-side action;
+- show connection state clearly;
+- poll the QR/status endpoint during pairing;
+- stop polling after connection;
+- never store a QR code in long-lived browser storage;
+- never store pairing codes in localStorage;
+- show QR expiry and refresh behavior;
+- provide a clean reset/retry action;
+- make it obvious which WhatsApp number is connected;
+- prevent users from selecting another tenant's `waAccountId`.
+
+For the business owner, the only physical authorization step should be the WhatsApp linking action on their actual phone.
+
+## 21. QR rules
+
+QR codes are temporary credentials for pairing.
+
+The application must:
+
+- request fresh QR state;
+- poll about every 3 seconds while pairing;
+- preserve the white quiet zone;
+- display the QR at a usable size;
+- never crop, recolor, blur, overlay, or transform it;
+- respect cache-control headers;
+- stop showing the QR after `isConnected=true`;
+- display a refresh state after expiry.
+
+A generated QR does not prove successful pairing. Only the successful connection state does.
+
+## 22. Connection/reconnect rules
+
+Do not delete credentials for every disconnect.
+
+Expected policy:
+
+```text
+transient disconnect
+    → reconnect, preserve credentials
+
+logged out
+    → require fresh pairing
+
+bad/terminal session
+    → clean reset, then fresh pairing
+
+connection replaced elsewhere
+    → avoid reconnect loops and surface status
+```
+
+Do not create a reconnect loop from multiple application workers. The Operator owns socket lifecycle.
+
+## 23. Data persistence rules
+
+The Operator's PostgreSQL database stores WhatsApp infrastructure state including:
+
+- `wa_accounts`;
+- `wa_sessions`;
+- `wa_signal_keys`;
+- `wa_account_bindings`;
+- `wa_controls`;
+- `wa_blocklist`;
+- `wa_webhook_dead_letters`.
+
+The application should store its own domain records separately:
+
+- contacts;
+- conversations;
+- orders;
+- tickets;
+- bookings;
+- products;
+- AI state;
+- audit events;
+- business preferences.
+
+Do not couple application schema directly to Baileys internal structures when a normalized model will work.
+
+## 24. Idempotency and duplicate protection
+
+Webhook delivery may be retried. Business actions must therefore be idempotent.
+
+For inbound messages, use a stable message identifier such as:
+
+```text
+waAccountId + messageId
+```
+
+For business operations, generate your own idempotency key where the domain operation can be retried.
+
+Examples:
+
+```text
+order-confirmation:<orderId>
+booking-reminder:<bookingId>:<reminderType>
+invoice:<invoiceId>
+lead-welcome:<leadId>
+```
+
+Never assume “one webhook request equals one business action.”
+
+## 25. Queues and background workers
+
+Anything slow should move out of the webhook request path.
+
+Good worker candidates:
+
+- AI response generation;
+- document processing;
+- media analysis;
+- OCR or classification;
+- CRM synchronization;
+- bulk report generation;
+- scheduled reminders;
+- retrying business actions;
+- reconciliation jobs.
+
+Pattern:
+
+```text
+Webhook
+ ↓
+Verify + authorize
+ ↓
+Persist/queue
+ ↓
+HTTP 2xx
+ ↓
+Worker
+ ↓
+Domain logic
+ ↓
+WhatsAppTransport.send()
+```
+
+## 26. Scheduled automations
+
+The Operator itself is not the business scheduler.
+
+For recurring actions use the application's scheduler/cron/worker infrastructure, for example:
+
+```text
+Every minute
+ ↓
+Find due notifications
+ ↓
+Check customer/tenant status
+ ↓
+Send through Operator
+ ↓
+Record result
+```
+
+This separation prevents the WhatsApp transport service from becoming a business-logic monolith.
+
+## 27. Safety and permissions
+
+Every automation must respect the application's:
+
+- tenant boundaries;
+- user permissions;
+- customer opt-out/blocklist rules;
+- manual/human mode;
+- AI enablement rules;
+- rate/volume controls;
+- audit requirements.
+
+Do not send messages merely because an LLM decided it is “probably okay.” The application should enforce policy before calling `/send`.
+
+The Operator also exposes blocklist/control persistence. Integrations should preserve those controls instead of bypassing them.
+
+## 28. What not to do
+
+Do not:
+
+- import Baileys in an application;
+- create a second WhatsApp socket;
+- add Evolution API without an explicit provider decision;
+- add Twilio without an explicit provider decision;
+- replace this transport with Meta Cloud API without an explicit migration decision;
+- expose `OPERATOR_API_KEY` in a browser;
+- expose `WEBHOOK_SECRET` in a browser;
+- trust browser-supplied tenant IDs for authorization;
+- use stale QR codes;
+- store pairing codes in localStorage;
+- hard-code guessed WhatsApp protocol versions;
+- delete credentials after every disconnect;
+- use local disk as the application's long-term source of WhatsApp credentials;
+- implement business rules inside the transport adapter;
+- send unsolicited bulk/spam messages;
+- claim a WhatsApp account is connected merely because a QR or pairing code was generated.
+
+## 29. Testing requirements
+
+Every WhatsApp-enabled application should test:
+
+### Authentication
+
+- wrong Operator API key;
+- missing API key;
+- missing webhook secret;
+- unauthorized tenant;
+- unauthorized `waAccountId`.
+
+### Pairing
+
+- new account;
+- already-connected account;
+- QR generation;
+- QR expiry;
+- QR refresh;
+- phone-number pairing code;
+- pairing-code expiry;
+- pairing success;
+- pairing cancellation/failure;
+- reset;
+- disconnect.
+
+### Messaging
+
+- text send;
+- media send;
+- invalid recipient;
+- disconnected account;
+- invalid media URL;
+- unsupported message type;
+- reply/quoted message;
+- read/presence/edit/delete actions.
+
+### Webhooks
+
+- valid signature;
+- invalid signature;
+- duplicate event;
+- retry;
+- webhook timeout;
+- webhook 500;
+- dead-letter recording;
+- no webhook configured.
+
+### Automation
+
+- AI disabled/manual mode;
+- blocked customer;
+- customer opt-out;
+- duplicate order event;
+- scheduler retry;
+- human handoff;
+- Operator outage;
+- application outage.
+
+## 30. Troubleshooting order
+
+When something fails, use this order:
+
+1. Confirm the Operator service is running.
+2. Check the deployment/build status.
+3. Check Operator logs.
+4. Confirm the account exists.
+5. Confirm the account is connected.
+6. Confirm application tenant authorization.
+7. Confirm webhook signature verification.
+8. Confirm the webhook returned 2xx.
+9. Check for webhook dead letters.
+10. Only then inspect AI/business logic.
+
+Do not randomly modify QR code rendering, Baileys versions, session credentials, or provider configuration before inspecting the evidence.
+
+## 31. Future Meta migration strategy
+
+The application architecture should remain:
+
+```text
+Business domain
       ↓
 WhatsAppTransport
       ↓
-NahaLabs self-hosted Operator / Baileys
+Current: NahaLabs Operator / WhatsApp Web
 ```
 
-Future path:
+Later:
 
 ```text
-Application domain
+Business domain
       ↓
 WhatsAppTransport
       ↓
-Meta Cloud API adapter
+Future: Meta Cloud API adapter
 ```
 
-Do not build customer/order/CRM/AI logic around Baileys-specific message types if a normalized application message model can be used instead.
+The migration should primarily replace the adapter and onboarding/pairing experience. CRM, orders, support, booking, AI, audit, and automation logic should not know whether the current transport is Baileys or Meta.
 
-## Final rule for coding assistants
+## 32. Example end-to-end integration
 
-Before changing WhatsApp code, inspect the current Operator implementation and this document. Reuse existing endpoints and abstractions. Make the smallest safe change. Test failure paths. Report exact evidence from typecheck/build/CI and deployment state. Never claim that a WhatsApp number is successfully linked until a real phone authorization has been observed and the Operator has recorded the successful pairing/connection path.
+### Server-side send helper
+
+```ts
+export async function sendWhatsAppText(
+  accountId: string,
+  to: string,
+  text: string,
+): Promise<void> {
+  const response = await fetch(`${process.env.OPERATOR_URL}/send`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-API-Key': process.env.OPERATOR_API_KEY!,
+    },
+    body: JSON.stringify({
+      waAccountId: accountId,
+      to,
+      type: 'text',
+      text,
+    }),
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`WhatsApp send failed: ${response.status} ${body}`);
+  }
+}
+```
+
+In a real production application, add application-side authorization, structured error handling, tracing, idempotency, and retry policy appropriate to the business operation.
+
+### Example webhook flow
+
+```ts
+export async function whatsappWebhook(request: Request): Promise<Response> {
+  const rawBody = await request.text();
+  const signature = request.headers.get('X-Webhook-Signature');
+
+  verifyHmacOrThrow(rawBody, signature, process.env.WEBHOOK_SECRET!);
+
+  const event = JSON.parse(rawBody) as {
+    schemaVersion: number;
+    waAccountId: string;
+    appId: string;
+    tenantId: string;
+    event: string;
+    data: unknown;
+  };
+
+  await assertAuthorizedBinding(event.appId, event.tenantId, event.waAccountId);
+  await enqueueIdempotently(event);
+
+  return new Response(null, { status: 204 });
+}
+```
+
+## 33. AI coding assistant final checklist
+
+Before completing any task involving this WhatsApp system, verify:
+
+```text
+[ ] Existing Operator reused
+[ ] No direct Baileys import in consuming app
+[ ] Operator URL configured server-side
+[ ] API key server-side only
+[ ] Webhook secret server-side only
+[ ] Tenant authorization enforced
+[ ] waAccountId ownership enforced
+[ ] Webhook HMAC verification implemented
+[ ] Idempotency implemented
+[ ] Long-running work moved to queue/worker when appropriate
+[ ] Business logic remains outside transport layer
+[ ] QR expiry handled
+[ ] Connection state handled
+[ ] Disconnect/reset semantics preserved
+[ ] Customer opt-out/blocklist/manual mode respected
+[ ] Tests cover success and failure paths
+[ ] Typecheck/build/tests passed
+[ ] Deployment result verified before claiming completion
+```
+
+## 34. Final instruction
+
+**Treat this document and the current Operator source code as the source of truth.**
+
+When changing the system, prefer the smallest safe change, reuse existing endpoints and abstractions, preserve tenant isolation, preserve secrets, preserve persisted sessions, and verify actual deployment/runtime evidence.
+
+Never tell the user that WhatsApp is connected until the real WhatsApp authorization has completed and the Operator reports the account as connected.
