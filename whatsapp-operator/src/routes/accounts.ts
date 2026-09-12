@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { createAccount, getAccount, createBinding } from '../db/accounts.js';
 import { asyncHandler } from '../middleware/async-handler.js';
-import { resetSession, startSession, stopSession } from '../whatsapp/session-manager.js';
+import { getPairingCode, requestPairingCode, resetSession, startSession, stopSession } from '../whatsapp/session-manager.js';
 
 export const accountsRouter = Router();
 
@@ -57,7 +57,83 @@ accountsRouter.post('/:id/connect', asyncHandler(async (req, res) => {
   res.json({ waAccountId: account.id, status: 'connecting' });
 }));
 
-/** Poll every ~3 seconds while pairing. QR responses are never cacheable. */
+/** Request a WhatsApp Web phone-number pairing code instead of scanning QR. */
+accountsRouter.post('/:id/pairing-code', asyncHandler(async (req, res) => {
+  const account = await getAccount(req.params.id);
+  if (!account) {
+    res.status(404).json({ error: 'NOT_FOUND' });
+    return;
+  }
+
+  if (account.is_connected) {
+    res.status(409).json({
+      error: 'ALREADY_CONNECTED',
+      message: 'This WhatsApp account is already connected',
+    });
+    return;
+  }
+
+  const { phoneNumber } = req.body ?? {};
+  if (!phoneNumber || !String(phoneNumber).trim()) {
+    res.status(400).json({
+      error: 'VALIDATION_ERROR',
+      message: 'phoneNumber is required in international format',
+    });
+    return;
+  }
+
+  try {
+    const pairing = await requestPairingCode(account.id, String(phoneNumber));
+    setNoStore(res);
+    res.json({
+      waAccountId: account.id,
+      status: 'pairing_code_ready',
+      pairingCode: pairing.code,
+      pairingCodeDisplay: pairing.code.match(/.{1,4}/g)?.join('-') ?? pairing.code,
+      expiresAt: new Date(pairing.expiresAt).toISOString(),
+      instructions: [
+        'Open WhatsApp on the business owner’s phone',
+        'Open Linked Devices',
+        'Choose Link a device',
+        'Choose Link with phone number instead',
+        'Enter the pairing code shown here',
+      ],
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (message.includes('already active')) {
+      res.status(409).json({ error: 'PAIRING_CODE_ACTIVE', message });
+      return;
+    }
+    if (message.includes('8–15 digits')) {
+      res.status(400).json({ error: 'INVALID_PHONE_NUMBER', message });
+      return;
+    }
+    res.status(409).json({ error: 'PAIRING_NOT_READY', message });
+  }
+}));
+
+/** Return the currently active phone pairing code, if one exists. */
+accountsRouter.get('/:id/pairing-code', asyncHandler(async (req, res) => {
+  const account = await getAccount(req.params.id);
+  if (!account) {
+    res.status(404).json({ error: 'NOT_FOUND' });
+    return;
+  }
+
+  const pairing = getPairingCode(account.id);
+  setNoStore(res);
+  res.json({
+    waAccountId: account.id,
+    status: pairing ? 'pairing_code_ready' : account.status,
+    pairingCode: pairing?.code ?? null,
+    pairingCodeDisplay: pairing?.code.match(/.{1,4}/g)?.join('-') ?? null,
+    expiresAt: pairing ? new Date(pairing.expiresAt).toISOString() : null,
+    isConnected: account.is_connected,
+  });
+}));
+
+/** Poll every ~3 seconds while QR pairing. QR responses are never cacheable. */
 accountsRouter.get('/:id/qr', asyncHandler(async (req, res) => {
   const account = await getAccount(req.params.id);
   if (!account) {
@@ -133,7 +209,7 @@ accountsRouter.post('/:id/disconnect', asyncHandler(async (req, res) => {
   res.json({ waAccountId: account.id, status: 'logged_out' });
 }));
 
-/** Reset to a clean, unpaired state and require a fresh QR scan. */
+/** Reset to a clean, unpaired state and require a fresh QR scan or pairing code. */
 accountsRouter.post('/:id/reset', asyncHandler(async (req, res) => {
   const account = await getAccount(req.params.id);
   if (!account) {
