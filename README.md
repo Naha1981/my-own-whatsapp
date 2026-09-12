@@ -1,49 +1,72 @@
-# NahaLabs Engineering Standard
+# NahaLabs Engineering Standard + WhatsApp Operator
 
-**The one repo you clone before you write a single line of any new NahaLabs application — small side project or enterprise contract (banks, government, insurers, mining, telcos).**
+This repository combines the NahaLabs engineering standards with a reusable self-hosted WhatsApp Operator for applications that need WhatsApp connectivity before moving to official Meta infrastructure.
 
-This repo is not a framework. It is:
+## WhatsApp platform
 
-1. A **software engineering constitution** — the lifecycle, gates, and rules every project follows (`docs/ENGINEERING_CONSTITUTION.md`).
-2. An **AI operating contract** — what you paste into Claude/Codex/Cursor as the first message of any project (`docs/CLAUDE.md`).
-3. A **self-hosted WhatsApp Operator** — your own free, un-official WhatsApp Business infrastructure. Business owner scans a QR code once, gets their own WhatsApp number connected, no Meta approval, no Twilio, no Evolution API, no monthly fee until you have a paying customer (`whatsapp-operator/`).
+`whatsapp-operator/` is a shared, self-hosted WhatsApp Web/Linked Devices transport built on Baileys. A business owner connects **their own WhatsApp number** by scanning a QR code shown inside the consuming application's dashboard. The application never handles the owner's WhatsApp password or credentials.
 
-## How to use this repo
+The Operator provides:
 
-```bash
-# 1. Clone it as the starting point for a new project
-git clone https://github.com/<you>/nahalabs-engineering-standard.git my-new-app
-cd my-new-app
-rm -rf .git && git init
+- persistent one-socket-per-account WhatsApp connections
+- Postgres-backed Baileys credentials and Signal keys
+- high-error-correction 512px QR PNG generation with a preserved quiet zone
+- QR expiry metadata, no-cache responses, and a direct `.png` endpoint
+- business-owner QR pairing through WhatsApp Linked Devices
+- safe reconnect, stale-socket protection, clean reset, and terminal bad-session recovery
+- pairing-success diagnostics
+- authenticated outbound message sending
+- signed inbound webhooks with retry/dead-letter storage
+- a reusable HTTP contract so applications remain independent of Baileys
 
-# 2. Paste docs/CLAUDE.md into your AI coding assistant as the first message
-# 3. Follow docs/ENGINEERING_CONSTITUTION.md — Discover, Baseline, Plan, Gate, Build
-# 4. If the app needs WhatsApp, deploy whatsapp-operator/ once (Render/Fly/Docker) and point every app at it
-```
+The PDF reference architecture is used as the operating baseline: the main application talks to a persistent Operator over HTTP, while the Operator owns the Baileys sockets and persistence. fileciteturn0file0L9-L30
 
-## What's inside
+## Repository layout
 
-```
+```text
 docs/
-  ENGINEERING_CONSTITUTION.md   # the lifecycle + rules (read this first)
-  CLAUDE.md                     # paste this into your AI assistant
-  SECURITY_CHECKLIST.md         # 20-point pre-launch checklist
-  whatsapp-architecture.md      # how the WhatsApp Operator works, plain English
-  adr/0000-template.md          # Architecture Decision Record template
-  templates/GATE_REPORT.md      # end-of-gate report format
+  ENGINEERING_CONSTITUTION.md
+  CLAUDE.md
+  SECURITY_CHECKLIST.md
+  whatsapp-architecture.md
+  WHATSAPP_OPERATOR_INTEGRATION.md
+  adr/0000-template.md
+  templates/GATE_REPORT.md
 
-whatsapp-operator/               # self-hosted, multi-tenant, QR-based WhatsApp
-  src/                          # Node.js + TypeScript + Baileys
-  db/schema.sql                 # Postgres schema (sessions, accounts, bindings)
-  README.md                     # deploy + API docs
+whatsapp-operator/
+  src/                         # Node.js + TypeScript + Baileys
+  db/schema.sql                # Postgres schema
+  README.md                    # operator deployment + API + QR pairing guide
+  Dockerfile
+
+.github/workflows/ci.yml       # typecheck + build verification
+render.yaml                    # Render deployment blueprint
 ```
 
-## The one-sentence version
+## Reuse from an application
 
-Establish the baseline. Understand the real architecture. Plan the smallest safe change.
-Build it. Test the failure paths, not just the happy path. Prove it works. Deploy in order.
-Verify production. Never trust a claim you haven't personally verified against the real system.
+Deploy `whatsapp-operator/` once on a persistent host and PostgreSQL. Each application then:
+
+1. creates/binds a WhatsApp account with its app and tenant IDs;
+2. starts the account and polls `/accounts/:id/qr` every ~3 seconds;
+3. displays the fresh QR to the business owner;
+4. lets the owner scan it from WhatsApp → Linked Devices → Link a device;
+5. waits for `/accounts/:id/status` to become `connected`;
+6. receives signed inbound messages through its webhook; and
+7. sends replies through `/send`.
+
+See `docs/WHATSAPP_OPERATOR_INTEGRATION.md` for the complete contract and migration boundary.
+
+## Positioning
+
+This is an **unofficial** WhatsApp Web/Linked Devices integration. It is intended as a self-hosted bridge while applications are being validated. It is deliberately kept behind an application transport boundary so that a future migration to Meta's official WhatsApp Cloud API can replace the transport without rewriting business logic.
+
+Use only in ways permitted for the connected WhatsApp accounts, and do not use the Operator for spam, bulk unsolicited messaging, or prohibited automation.
+
+## Engineering rule
+
+Establish the baseline. Understand the real architecture. Plan the smallest safe change. Build it. Test failure paths, not just happy paths. Verify the live deployment rather than assuming a merge means production is updated.
 
 ## License
 
-MIT. Use it, fork it, open-source your own version of it.
+MIT.
