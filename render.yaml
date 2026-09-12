@@ -1,13 +1,6 @@
-# Render Blueprint — deploys ONLY the WhatsApp Operator (rootDir: whatsapp-operator).
-#
-# Usage:
-#   1. Push this repo to GitHub (already done if you're reading this from the repo).
-#   2. Render → New → Blueprint → connect the repo → Render reads this file.
-#   3. It prompts you for the 3 secrets below (sync: false) — generate them with
-#      `openssl rand -hex 32` and paste the same values into every Core app's env.
-#   4. Apply → the Operator builds (Docker) and deploys.
-#   5. Copy the resulting URL into every app's OPERATOR_URL.
-
+# Render Blueprint — production-oriented configuration for the reusable WhatsApp Operator.
+# The Free plan is retained for initial testing. For client production, use an always-on
+# paid instance because Free services can sleep after 15 minutes without inbound traffic.
 services:
   - type: web
     name: nahalabs-whatsapp-operator
@@ -16,6 +9,7 @@ services:
     plan: free
     autoDeploy: true
     healthCheckPath: /health
+    maxShutdownDelaySeconds: 60
     envVars:
       - key: NODE_ENV
         value: production
