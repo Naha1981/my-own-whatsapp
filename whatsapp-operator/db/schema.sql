@@ -8,11 +8,17 @@ CREATE TABLE IF NOT EXISTS wa_accounts (
   label          TEXT,
   phone_number   TEXT,
   qr_code        TEXT,
+  qr_generated_at TIMESTAMPTZ,
+  qr_expires_at  TIMESTAMPTZ,
   is_connected   BOOLEAN NOT NULL DEFAULT FALSE,
   status         TEXT NOT NULL DEFAULT 'pending',
   created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Safe migration for databases created before QR expiry metadata existed.
+ALTER TABLE wa_accounts ADD COLUMN IF NOT EXISTS qr_generated_at TIMESTAMPTZ;
+ALTER TABLE wa_accounts ADD COLUMN IF NOT EXISTS qr_expires_at TIMESTAMPTZ;
 
 CREATE TABLE IF NOT EXISTS wa_sessions (
   wa_account_id  UUID NOT NULL REFERENCES wa_accounts(id) ON DELETE CASCADE,
@@ -56,9 +62,6 @@ CREATE TABLE IF NOT EXISTS wa_blocklist (
   PRIMARY KEY (tenant_id, phone_number)
 );
 
--- Durable record of a webhook that could not be delivered after all retries.
--- The Operator does not automatically replay these records; applications can
--- inspect this table and build an explicit retry/replay workflow later.
 CREATE TABLE IF NOT EXISTS wa_webhook_dead_letters (
   id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   wa_account_id  UUID NOT NULL REFERENCES wa_accounts(id) ON DELETE CASCADE,
@@ -74,3 +77,4 @@ CREATE TABLE IF NOT EXISTS wa_webhook_dead_letters (
 CREATE INDEX IF NOT EXISTS idx_bindings_account ON wa_account_bindings(wa_account_id);
 CREATE INDEX IF NOT EXISTS idx_bindings_app_tenant ON wa_account_bindings(app_id, tenant_id);
 CREATE INDEX IF NOT EXISTS idx_dead_letters_account ON wa_webhook_dead_letters(wa_account_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_accounts_qr_expiry ON wa_accounts(qr_expires_at) WHERE qr_expires_at IS NOT NULL;
