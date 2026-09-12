@@ -1,0 +1,16 @@
+name: Render keepalive
+
+on:
+  schedule:
+    # Every 10 minutes. Render Free sleeps after 15 minutes with no inbound traffic.
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+jobs:
+  ping-render:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wake and keep Render operator warm
+        env:
+          RENDER_OPERATOR_URL: ${{ secrets.RENDER_OPERATOR_URL }}
+        run: bash scripts/render-keepalive.sh
