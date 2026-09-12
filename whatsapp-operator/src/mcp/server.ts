@@ -1,0 +1,237 @@
+import { McpServer } from '@modelcontextprotocol/server';
+import * as z from 'zod/v4';
+import { listAccounts, getActiveBindings, getAccount } from '../db/accounts.js';
+import { requestPairingCode, startSession, stopSession, getSocket } from '../whatsapp/session-manager.js';
+import { config } from '../config.js';
+import type { AuthInfo } from '@modelcontextprotocol/server';
+
+export interface McpIdentity {
+  clientId: string;
+  appId: string;
+  tenantId: string;
+  scopes: string[];
+  expiresAt: number;
+}
+
+function text(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function requireScope(identity: McpIdentity, scope: string): void {
+  if (!identity.scopes.includes(scope)) {
+    throw new Error(`MCP scope required: ${scope}`);
+  }
+}
+
+async function authorizedAccounts(identity: McpIdentity) {
+  const accounts = await listAccounts();
+  const authorized = [];
+  for (const account of accounts) {
+    const bindings = await getActiveBindings(account.id);
+    if (bindings.some((binding) => binding.app_id === identity.appId && binding.tenant_id === identity.tenantId)) {
+      authorized.push(account);
+    }
+  }
+  return authorized;
+}
+
+async function authorizedAccount(identity: McpIdentity, waAccountId: string) {
+  const account = await getAccount(waAccountId);
+  if (!account) throw new Error('WhatsApp account not found');
+  const bindings = await getActiveBindings(waAccountId);
+  const allowed = bindings.some((binding) => binding.app_id === identity.appId && binding.tenant_id === identity.tenantId);
+  if (!allowed) throw new Error('WhatsApp account is outside the authorized MCP tenant scope');
+  return account;
+}
+
+function phoneJid(value: string): string {
+  if (value.includes('@s.whatsapp.net') || value.includes('@g.us')) return value;
+  const digits = value.replace(/\D/g, '');
+  if (!/^\d{5,20}$/.test(digits)) throw new Error('Recipient must contain a valid WhatsApp phone number');
+  return `${digits}@s.whatsapp.net`;
+}
+
+function identityFromAuth(auth: AuthInfo | undefined): McpIdentity {
+  if (!auth?.extra || typeof auth.extra !== 'object') throw new Error('MCP authentication context missing');
+  const extra = auth.extra as Record<string, unknown>;
+  const scopes = Array.isArray(auth.scopes) ? auth.scopes.map(String) : [];
+  const clientId = text(extra.clientId);
+  const appId = text(extra.appId);
+  const tenantId = text(extra.tenantId);
+  const expiresAt = Number(auth.expiresAt);
+  if (!clientId || !appId || !tenantId || !Number.isFinite(expiresAt)) throw new Error('Invalid MCP authentication context');
+  return { clientId, appId, tenantId, scopes, expiresAt };
+}
+
+function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+export function createMcpServer(auth: AuthInfo | undefined): McpServer {
+  const identity = identityFromAuth(auth);
+  const server = new McpServer({ name: 'NahaLabs WhatsApp', version: '1.0.0' });
+
+  server.registerTool(
+    'whatsapp_list_accounts',
+    {
+      description: 'List WhatsApp accounts authorized for the connected NahaLabs app/tenant.',
+      inputSchema: z.object({}),
+    },
+    async () => {
+      try {
+        requireScope(identity, 'whatsapp.read');
+        const accounts = await authorizedAccounts(identity);
+        return {
+          content: [{ type: 'text', text: JSON.stringify({ accounts: accounts.map((account) => ({ waAccountId: account.id, label: account.label, phoneNumber: account.phone_number, status: account.status, isConnected: account.is_connected })) }) }],
+        };
+      } catch (err) {
+        return { isError: true, content: [{ type: 'text', text: errorText(err) }] };
+      }
+    },
+  );
+
+  server.registerTool(
+    'whatsapp_get_status',
+    {
+      description: 'Get live connection status for an authorized WhatsApp account.',
+      inputSchema: z.object({ waAccountId: z.string().uuid() }),
+    },
+    async ({ waAccountId }) => {
+      try {
+        requireScope(identity, 'whatsapp.read');
+        const account = await authorizedAccount(identity, waAccountId);
+        return {
+          content: [{ type: 'text', text: JSON.stringify({ waAccountId: account.id, status: account.status, isConnected: account.is_connected, phoneNumber: account.phone_number }) }],
+        };
+      } catch (err) {
+        return { isError: true, content: [{ type: 'text', text: errorText(err) }] };
+      }
+    },
+  );
+
+  server.registerTool(
+    'whatsapp_start_account',
+    {
+      description: 'Start an authorized WhatsApp account session. Use this when pairing is required.',
+      inputSchema: z.object({ waAccountId: z.string().uuid() }),
+    },
+    async ({ waAccountId }) => {
+      try {
+        requireScope(identity, 'whatsapp.write');
+        await authorizedAccount(identity, waAccountId);
+        await startSession(waAccountId);
+        return { content: [{ type: 'text', text: JSON.stringify({ ok: true, waAccountId, status: 'connecting' }) }] };
+      } catch (err) {
+        return { isError: true, content: [{ type: 'text', text: errorText(err) }] };
+      }
+    },
+  );
+
+  server.registerTool(
+    'whatsapp_request_pairing_code',
+    {
+      description: 'Request a WhatsApp phone-number pairing code for an authorized account.',
+      inputSchema: z.object({ waAccountId: z.string().uuid(), phoneNumber: z.string().min(5).max(30) }),
+    },
+    async ({ waAccountId, phoneNumber }) => {
+      try {
+        requireScope(identity, 'whatsapp.write');
+        const account = await authorizedAccount(identity, waAccountId);
+        if (account.is_connected) throw new Error('WhatsApp account is already connected');
+        const pairing = await requestPairingCode(waAccountId, phoneNumber);
+        return {
+          content: [{ type: 'text', text: JSON.stringify({ waAccountId, status: 'pairing_code_ready', pairingCode: pairing.code, pairingCodeDisplay: pairing.code.match(/.{1,4}/g)?.join('-') ?? pairing.code, expiresAt: new Date(pairing.expiresAt).toISOString() }) }],
+        };
+      } catch (err) {
+        return { isError: true, content: [{ type: 'text', text: errorText(err) }] };
+      }
+    },
+  );
+
+  server.registerTool(
+    'whatsapp_send_message',
+    {
+      description: 'Send a WhatsApp text message from an authorized connected account. This is a consequential write action; the connected MCP client may ask the human to approve it.',
+      inputSchema: z.object({
+        waAccountId: z.string().uuid(),
+        to: z.string().min(5).max(40),
+        text: z.string().min(1).max(10000),
+      }),
+    },
+    async ({ waAccountId, to, text: messageText }) => {
+      try {
+        requireScope(identity, 'whatsapp.write');
+        await authorizedAccount(identity, waAccountId);
+        const sock = getSocket(waAccountId);
+        if (!sock) throw new Error('No active WhatsApp session. Connect the account first.');
+        const result = await sock.sendMessage(phoneJid(to), { text: messageText });
+        return {
+          content: [{ type: 'text', text: JSON.stringify({ ok: true, waAccountId, to, messageId: result.key?.id ?? null }) }],
+        };
+      } catch (err) {
+        return { isError: true, content: [{ type: 'text', text: errorText(err) }] };
+      }
+    },
+  );
+
+  server.registerTool(
+    'whatsapp_mark_read',
+    {
+      description: 'Mark one WhatsApp message as read on an authorized account.',
+      inputSchema: z.object({ waAccountId: z.string().uuid(), messageRemoteJid: z.string().min(1), messageId: z.string().min(1), messageFromMe: z.boolean().default(false) }),
+    },
+    async ({ waAccountId, messageRemoteJid, messageId, messageFromMe }) => {
+      try {
+        requireScope(identity, 'whatsapp.write');
+        await authorizedAccount(identity, waAccountId);
+        const sock = getSocket(waAccountId);
+        if (!sock) throw new Error('No active WhatsApp session. Connect the account first.');
+        await sock.readMessages([{ remoteJid: messageRemoteJid, id: messageId, fromMe: messageFromMe }]);
+        return { content: [{ type: 'text', text: JSON.stringify({ ok: true, waAccountId, messageId }) }] };
+      } catch (err) {
+        return { isError: true, content: [{ type: 'text', text: errorText(err) }] };
+      }
+    },
+  );
+
+  server.registerTool(
+    'whatsapp_set_presence',
+    {
+      description: 'Set WhatsApp presence for an authorized account.',
+      inputSchema: z.object({ waAccountId: z.string().uuid(), presence: z.enum(['available', 'unavailable', 'composing', 'recording', 'paused']), to: z.string().optional() }),
+    },
+    async ({ waAccountId, presence, to }) => {
+      try {
+        requireScope(identity, 'whatsapp.write');
+        await authorizedAccount(identity, waAccountId);
+        const sock = getSocket(waAccountId);
+        if (!sock) throw new Error('No active WhatsApp session. Connect the account first.');
+        const jid = to ? phoneJid(to) : undefined;
+        await sock.sendPresenceUpdate(presence, jid);
+        return { content: [{ type: 'text', text: JSON.stringify({ ok: true, waAccountId, presence, ...(jid ? { to: jid } : {}) }) }] };
+      } catch (err) {
+        return { isError: true, content: [{ type: 'text', text: errorText(err) }] };
+      }
+    },
+  );
+
+  server.registerTool(
+    'whatsapp_disconnect',
+    {
+      description: 'Log out an authorized WhatsApp account and clear its saved WhatsApp session credentials.',
+      inputSchema: z.object({ waAccountId: z.string().uuid() }),
+    },
+    async ({ waAccountId }) => {
+      try {
+        requireScope(identity, 'whatsapp.write');
+        await authorizedAccount(identity, waAccountId);
+        await stopSession(waAccountId);
+        return { content: [{ type: 'text', text: JSON.stringify({ ok: true, waAccountId, status: 'logged_out' }) }] };
+      } catch (err) {
+        return { isError: true, content: [{ type: 'text', text: errorText(err) }] };
+      }
+    },
+  );
+
+  return server;
+}
