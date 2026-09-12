@@ -12,16 +12,43 @@ controls. Do not use it for spam, bulk unsolicited messaging, or other prohibite
 ## Architecture
 
 ```text
-Brain app(s) ──HTTP + OPERATOR_API_KEY──▶ WhatsApp Operator ──Baileys──▶ WhatsApp
-       ▲                                      │
-       └──── signed webhook ◀─────────────────┤
-                                              │
-                                      shared PostgreSQL
+Business owner phone
+        │
+        │ WhatsApp → Linked Devices → Link a device → Scan QR
+        ▼
+Brain app dashboard ──HTTP + OPERATOR_API_KEY──▶ WhatsApp Operator ──Baileys──▶ WhatsApp
+       ▲                                             │
+       └──────────── signed inbound webhook ◀────────┤
+                                                     │
+                                             shared PostgreSQL
 ```
 
 The Operator owns one live socket per `waAccountId`. PostgreSQL stores credentials and Signal keys so
 normal Operator restarts/redeploys do not require another QR scan. Run one Operator process unless you
 add cross-instance socket ownership/locking.
+
+## Business-owner QR pairing
+
+The intended flow is simple:
+
+1. Your application creates a WhatsApp account with `POST /accounts` and receives `waAccountId`.
+2. Your application calls `POST /accounts/:id/connect`.
+3. The dashboard polls `GET /accounts/:id/qr` every ~3 seconds.
+4. When `status` is `qr_ready`, render the returned `qrCode` value directly as an image source. It is a
+   PNG data URL generated at 512×512 pixels with a quiet zone and high error correction.
+5. On the business owner's **own WhatsApp phone**, open **Linked Devices → Link a device** and scan the
+   QR displayed in your application's dashboard.
+6. On success, the Operator receives/logs the pairing-success event and the account changes to
+   `connected`; the dashboard should immediately stop showing the QR and show the connected number.
+7. The same business WhatsApp number can now receive messages through the Operator webhook and send
+   replies through `POST /send`.
+
+Do not screenshot, crop, recolor, or otherwise transform the QR before displaying it. Preserve the white
+quiet zone around the code. The API sends `Cache-Control: no-store` so browsers/proxies should not reuse an
+old one-time QR.
+
+QRs are deliberately short-lived. The API returns `qrGeneratedAt` and `qrExpiresAt`; after expiry the
+Operator reports `qr_expired` and returns `qrCode: null`. Keep polling so the next fresh QR is displayed.
 
 ## Environment
 
@@ -58,7 +85,7 @@ psql "$DATABASE_URL" -f db/schema.sql
 
 The schema contains:
 
-- `wa_accounts` — connected WhatsApp identities and current QR/status snapshot.
+- `wa_accounts` — connected WhatsApp identities plus QR snapshot and QR expiry metadata.
 - `wa_sessions` and `wa_signal_keys` — persisted Baileys authentication and Signal state.
 - `wa_account_bindings` — app/tenant ownership plus inbound webhook destinations.
 - `wa_controls` and `wa_blocklist` — application-level safety switches/opt-outs.
@@ -114,15 +141,21 @@ Response:
 
 `POST /accounts/:id/connect`
 
-Then poll `GET /accounts/:id/qr` every 2–5 seconds while pairing:
+Then poll `GET /accounts/:id/qr` every ~3 seconds:
 
 ```json
 {
   "status": "qr_ready",
   "isConnected": false,
-  "qrCode": "data:image/png;base64,..."
+  "qrCode": "data:image/png;base64,...",
+  "qrGeneratedAt": "2026-09-12T07:00:00.000Z",
+  "qrExpiresAt": "2026-09-12T07:00:20.000Z",
+  "qrPollIntervalMs": 3000
 }
 ```
+
+Render `qrCode` exactly as an image source. The Operator generates a 512×512 PNG with high error correction
+and an explicit quiet zone so the business owner's WhatsApp camera can reliably decode it from a screen.
 
 When WhatsApp accepts the link, `GET /accounts/:id/status` returns:
 
@@ -135,9 +168,10 @@ When WhatsApp accepts the link, `GET /accounts/:id/status` returns:
 }
 ```
 
-The Operator resolves a WhatsApp Web version before each socket creation and logs the resolved version.
-If resolution fails, Baileys' internal fallback is used and the failure is logged. The QR timeout is set
-explicitly to 20 seconds.
+The Operator resolves a live WhatsApp Web revision before each socket creation, falls back to Baileys'
+version lookup when needed, and sets a 20-second QR timeout. Pairing is a WhatsApp Linked Devices flow:
+the business owner links their own WhatsApp number; the Operator does not ask the application for the
+owner's WhatsApp credentials or password.
 
 ### Reset a broken pairing/session
 
@@ -183,10 +217,11 @@ When troubleshooting QR pairing, inspect logs in this order:
 
 1. Is the deployed commit the code you expect?
 2. Is a current QR being generated and refreshed?
-3. Does the log contain `WhatsApp pairing success received` after the real phone scan?
-4. What `statusCode` and error message were logged on close?
-5. Are `DATABASE_URL`, `WEBHOOK_SECRET`, and `OPERATOR_API_KEY` identical wherever the two services share them?
-6. Only then investigate account/number trust or WhatsApp-side refusal.
+3. Does the QR endpoint report fresh `qrGeneratedAt` / `qrExpiresAt` values?
+4. Does the log contain `WhatsApp pairing success received` after the real phone scan?
+5. What `statusCode` and error message were logged on close?
+6. Are `DATABASE_URL`, `WEBHOOK_SECRET`, and `OPERATOR_API_KEY` identical wherever the two services share them?
+7. Only then investigate account/number trust or WhatsApp-side refusal.
 
 A QR timing out with no pairing-success signal is not itself a QR-generation bug; the underlying failure
 may be on WhatsApp's side.
