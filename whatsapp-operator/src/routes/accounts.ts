@@ -15,6 +15,12 @@ function validateProductionWebhookUrl(webhookUrl: string): boolean {
   }
 }
 
+function setNoStore(res: { setHeader(name: string, value: string): void }): void {
+  res.setHeader('Cache-Control', 'no-store, max-age=0, must-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+}
+
 /** Create a WhatsApp account and bind it to an application tenant. */
 accountsRouter.post('/', asyncHandler(async (req, res) => {
   const { label, appId, tenantId, webhookUrl } = req.body ?? {};
@@ -51,10 +57,7 @@ accountsRouter.post('/:id/connect', asyncHandler(async (req, res) => {
   res.json({ waAccountId: account.id, status: 'connecting' });
 }));
 
-/**
- * Poll every 2-3 seconds while pairing. QR responses are never cacheable so
- * the dashboard cannot accidentally show an expired one-time QR.
- */
+/** Poll every ~3 seconds while pairing. QR responses are never cacheable. */
 accountsRouter.get('/:id/qr', asyncHandler(async (req, res) => {
   const account = await getAccount(req.params.id);
   if (!account) {
@@ -62,9 +65,7 @@ accountsRouter.get('/:id/qr', asyncHandler(async (req, res) => {
     return;
   }
 
-  res.setHeader('Cache-Control', 'no-store, max-age=0, must-revalidate');
-  res.setHeader('Pragma', 'no-cache');
-  res.setHeader('Expires', '0');
+  setNoStore(res);
 
   const expired = Boolean(account.qr_expires_at && new Date(account.qr_expires_at).getTime() <= Date.now());
   res.json({
@@ -73,8 +74,38 @@ accountsRouter.get('/:id/qr', asyncHandler(async (req, res) => {
     qrCode: expired ? null : account.qr_code,
     qrGeneratedAt: expired ? null : account.qr_generated_at,
     qrExpiresAt: expired ? null : account.qr_expires_at,
+    qrImageUrl: expired ? null : `/accounts/${account.id}/qr.png`,
     qrPollIntervalMs: 3000,
   });
+}));
+
+/** Direct PNG endpoint for frontends that prefer <img src> over a data URL. */
+accountsRouter.get('/:id/qr.png', asyncHandler(async (req, res) => {
+  const account = await getAccount(req.params.id);
+  if (!account) {
+    res.status(404).json({ error: 'NOT_FOUND' });
+    return;
+  }
+
+  const expired = Boolean(account.qr_expires_at && new Date(account.qr_expires_at).getTime() <= Date.now());
+  if (!account.qr_code || expired || account.status !== 'qr_ready' || account.is_connected) {
+    res.status(410).json({ error: 'QR_NOT_AVAILABLE', message: 'No fresh QR code is currently available' });
+    return;
+  }
+
+  const separator = account.qr_code.indexOf(',');
+  const base64 = separator >= 0 ? account.qr_code.slice(separator + 1) : account.qr_code;
+  let png: Buffer;
+  try {
+    png = Buffer.from(base64, 'base64');
+  } catch {
+    res.status(500).json({ error: 'QR_DECODE_FAILED' });
+    return;
+  }
+
+  setNoStore(res);
+  res.type('png');
+  res.send(png);
 }));
 
 accountsRouter.get('/:id/status', asyncHandler(async (req, res) => {
