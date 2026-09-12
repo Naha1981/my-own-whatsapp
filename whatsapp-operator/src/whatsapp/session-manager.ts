@@ -226,8 +226,6 @@ async function startSessionInternal(waAccountId: string): Promise<void> {
     auth: state,
     ...(version ? { version } : {}),
     printQRInTerminal: false,
-    // Keep Baileys' canonical browser preset. A branded/non-canonical browser
-    // label can make phone-number pairing codes get rejected by WhatsApp.
     qrTimeout: QR_LIFETIME_MS,
     syncFullHistory: false,
     markOnlineOnConnect: true,
@@ -391,7 +389,7 @@ async function startSessionInternal(waAccountId: string): Promise<void> {
   sock.ev.on('contacts.upsert', async (data) => {
     await forwardEvent(waAccountId, 'contacts.upsert', data).catch((err) =>
       logger.error({ err, waAccountId }, 'Failed to forward contact event')
-  );
+    );
   });
 
   sock.ev.on('contacts.update', async (data) => {
@@ -449,6 +447,39 @@ export async function startSession(waAccountId: string): Promise<void> {
     await startup;
   } finally {
     if (startingSessions.get(waAccountId) === startup) startingSessions.delete(waAccountId);
+  }
+}
+
+/**
+ * Stop the in-memory socket during a process shutdown without logging out of
+ * WhatsApp or deleting persisted credentials. The next process boot can reuse
+ * the same Postgres auth state and reconnect without a new QR/pairing step.
+ */
+export async function shutdownSession(waAccountId: string): Promise<void> {
+  const sock = sockets.get(waAccountId);
+  stopping.add(waAccountId);
+  try {
+    clearQrExpiryTimer(waAccountId);
+    qrReadyAccounts.delete(waAccountId);
+    pairingModeRequested.delete(waAccountId);
+    clearPairingCode(waAccountId);
+    pairingCodeRequests.delete(waAccountId);
+
+    if (sockets.get(waAccountId) === sock) sockets.delete(waAccountId);
+
+    if (!sock) return;
+
+    const rawSocket = sock as any;
+    try {
+      rawSocket.ev?.removeAllListeners?.('connection.update');
+      rawSocket.ev?.removeAllListeners?.('CB:iq,,pair-success');
+      rawSocket.ws?.close?.();
+      rawSocket.end?.();
+    } catch (err) {
+      logger.warn({ err, waAccountId }, 'Failed to close WhatsApp socket cleanly during shutdown');
+    }
+  } finally {
+    stopping.delete(waAccountId);
   }
 }
 
