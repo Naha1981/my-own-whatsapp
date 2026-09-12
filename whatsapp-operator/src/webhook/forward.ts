@@ -35,7 +35,8 @@ export async function forwardEvent(waAccountId: string, event: string, data: unk
         deliveredAt: new Date().toISOString(),
       };
 
-      if (!binding.webhook_url) {
+      const webhookUrl = binding.webhook_url;
+      if (!webhookUrl) {
         logger.info(
           { waAccountId, appId: binding.app_id, tenantId: binding.tenant_id, event },
           'Webhook not configured yet — event retained by account scope but not delivered'
@@ -43,7 +44,7 @@ export async function forwardEvent(waAccountId: string, event: string, data: unk
         return;
       }
 
-      await deliverWithRetry(waAccountId, binding, payload);
+      await deliverWithRetry(waAccountId, { ...binding, webhook_url: webhookUrl }, payload);
     })
   );
 }
