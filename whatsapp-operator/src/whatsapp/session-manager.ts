@@ -17,6 +17,7 @@ const QR_SIZE_PX = 512;
 const PAIRING_READY_TIMEOUT_MS = 15_000;
 
 const sockets = new Map<string, WASocket>();
+const startingSessions = new Map<string, Promise<void>>();
 const stopping = new Set<string>();
 const qrExpiryTimers = new Map<string, NodeJS.Timeout>();
 const qrReadyAccounts = new Set<string>();
@@ -209,7 +210,7 @@ export async function requestPairingCode(waAccountId: string, phoneNumber: strin
   }
 }
 
-export async function startSession(waAccountId: string): Promise<void> {
+async function startSessionInternal(waAccountId: string): Promise<void> {
   if (sockets.has(waAccountId)) {
     logger.info({ waAccountId }, 'Session already running, ignoring duplicate start');
     return;
@@ -225,7 +226,8 @@ export async function startSession(waAccountId: string): Promise<void> {
     auth: state,
     ...(version ? { version } : {}),
     printQRInTerminal: false,
-    browser: ['Ubuntu', 'Chrome', '120.0.0.0'],
+    // Keep Baileys' canonical browser preset. A branded/non-canonical browser
+    // label can make phone-number pairing codes get rejected by WhatsApp.
     qrTimeout: QR_LIFETIME_MS,
     syncFullHistory: false,
     markOnlineOnConnect: true,
@@ -389,7 +391,7 @@ export async function startSession(waAccountId: string): Promise<void> {
   sock.ev.on('contacts.upsert', async (data) => {
     await forwardEvent(waAccountId, 'contacts.upsert', data).catch((err) =>
       logger.error({ err, waAccountId }, 'Failed to forward contact event')
-    );
+  );
   });
 
   sock.ev.on('contacts.update', async (data) => {
@@ -427,6 +429,27 @@ export async function startSession(waAccountId: string): Promise<void> {
       logger.error({ err, waAccountId }, 'Failed to forward incoming call event')
     );
   });
+}
+
+export async function startSession(waAccountId: string): Promise<void> {
+  if (sockets.has(waAccountId)) {
+    logger.info({ waAccountId }, 'Session already running, ignoring duplicate start');
+    return;
+  }
+
+  const existing = startingSessions.get(waAccountId);
+  if (existing) {
+    await existing;
+    return;
+  }
+
+  const startup = startSessionInternal(waAccountId);
+  startingSessions.set(waAccountId, startup);
+  try {
+    await startup;
+  } finally {
+    if (startingSessions.get(waAccountId) === startup) startingSessions.delete(waAccountId);
+  }
 }
 
 export async function stopSession(waAccountId: string): Promise<void> {
