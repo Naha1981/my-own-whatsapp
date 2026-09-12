@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { createAccount, getAccount, createBinding } from '../db/accounts.js';
+import { createAccount, getAccount, listAccounts, createBinding } from '../db/accounts.js';
 import { asyncHandler } from '../middleware/async-handler.js';
 import { getPairingCode, requestPairingCode, resetSession, startSession, stopSession } from '../whatsapp/session-manager.js';
 
@@ -20,6 +20,21 @@ function setNoStore(res: { setHeader(name: string, value: string): void }): void
   res.setHeader('Pragma', 'no-cache');
   res.setHeader('Expires', '0');
 }
+
+/** List accounts for the authenticated operator/admin tooling. */
+accountsRouter.get('/', asyncHandler(async (_req, res) => {
+  const accounts = await listAccounts();
+  setNoStore(res);
+  res.json({
+    accounts: accounts.map((account) => ({
+      waAccountId: account.id,
+      label: account.label,
+      phoneNumber: account.phone_number,
+      status: account.status,
+      isConnected: account.is_connected,
+    })),
+  });
+}));
 
 /** Create a WhatsApp account and bind it to an application tenant. */
 accountsRouter.post('/', asyncHandler(async (req, res) => {
