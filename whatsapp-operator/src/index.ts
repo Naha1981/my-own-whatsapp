@@ -11,6 +11,7 @@ import { messagesRouter } from './routes/messages.js';
 import { mediaRouter } from './routes/media.js';
 import { callsRouter } from './routes/calls.js';
 import { healthRouter } from './routes/health.js';
+import { mcpRouter } from './routes/mcp.js';
 import { pool } from './db/pool.js';
 import { initializeDatabase } from './db/init.js';
 import { listAccounts } from './db/accounts.js';
@@ -23,9 +24,14 @@ const publicDir = path.resolve(__dirname, '../public');
 
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
+app.use(express.urlencoded({ extended: false, limit: '32kb' }));
 
 // No auth required — used by uptime monitors / your keep-alive scheduler.
 app.use('/health', healthRouter);
+
+// Remote MCP discovery, OAuth and authenticated Streamable HTTP endpoint.
+// MCP uses its own OAuth credentials; the private Operator API key never leaves the server.
+app.use(mcpRouter);
 
 // Browser-based operator test console. The API key is entered by the operator,
 // held only in browser memory, and sent directly to this same-origin API.

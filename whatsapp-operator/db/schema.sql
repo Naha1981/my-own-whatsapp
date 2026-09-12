@@ -78,7 +78,44 @@ CREATE TABLE IF NOT EXISTS wa_webhook_dead_letters (
 
 ALTER TABLE wa_webhook_dead_letters ALTER COLUMN webhook_url DROP NOT NULL;
 
+-- Remote MCP OAuth state. Tokens are stored only as SHA-256 hashes.
+CREATE TABLE IF NOT EXISTS mcp_oauth_clients (
+  client_id                    TEXT PRIMARY KEY,
+  client_name                  TEXT NOT NULL,
+  redirect_uris                TEXT[] NOT NULL,
+  client_secret_hash           TEXT,
+  token_endpoint_auth_method   TEXT NOT NULL DEFAULT 'none',
+  created_at                   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS mcp_oauth_codes (
+  code_hash       TEXT PRIMARY KEY,
+  client_id       TEXT NOT NULL REFERENCES mcp_oauth_clients(client_id) ON DELETE CASCADE,
+  redirect_uri    TEXT NOT NULL,
+  code_challenge  TEXT NOT NULL,
+  scope           TEXT NOT NULL,
+  expires_at      TIMESTAMPTZ NOT NULL,
+  used_at         TIMESTAMPTZ,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS mcp_oauth_tokens (
+  access_token_hash   TEXT PRIMARY KEY,
+  refresh_token_hash  TEXT UNIQUE NOT NULL,
+  client_id           TEXT NOT NULL REFERENCES mcp_oauth_clients(client_id) ON DELETE CASCADE,
+  app_id              TEXT NOT NULL,
+  tenant_id           TEXT NOT NULL,
+  scope               TEXT NOT NULL,
+  access_expires_at   TIMESTAMPTZ NOT NULL,
+  refresh_expires_at  TIMESTAMPTZ NOT NULL,
+  revoked_at          TIMESTAMPTZ,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE INDEX IF NOT EXISTS idx_bindings_account ON wa_account_bindings(wa_account_id);
 CREATE INDEX IF NOT EXISTS idx_bindings_app_tenant ON wa_account_bindings(app_id, tenant_id);
 CREATE INDEX IF NOT EXISTS idx_dead_letters_account ON wa_webhook_dead_letters(wa_account_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_accounts_qr_expiry ON wa_accounts(qr_expires_at) WHERE qr_expires_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_mcp_codes_expiry ON mcp_oauth_codes(expires_at);
+CREATE INDEX IF NOT EXISTS idx_mcp_tokens_client ON mcp_oauth_tokens(client_id);
+CREATE INDEX IF NOT EXISTS idx_mcp_tokens_refresh ON mcp_oauth_tokens(refresh_token_hash);
