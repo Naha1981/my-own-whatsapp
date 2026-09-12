@@ -5,6 +5,8 @@ export interface WaAccount {
   label: string | null;
   phone_number: string | null;
   qr_code: string | null;
+  qr_generated_at: string | null;
+  qr_expires_at: string | null;
   is_connected: boolean;
   status: string;
 }
@@ -32,7 +34,6 @@ export async function getAccount(id: string): Promise<WaAccount | null> {
 }
 
 export async function listConnectableAccounts(): Promise<WaAccount[]> {
-  // Accounts that have saved credentials should be reconnected on boot.
   const { rows } = await pool.query<WaAccount>(
     `SELECT a.* FROM wa_accounts a
      WHERE EXISTS (SELECT 1 FROM wa_sessions s WHERE s.wa_account_id = a.id AND s.key = 'creds')
@@ -43,7 +44,7 @@ export async function listConnectableAccounts(): Promise<WaAccount[]> {
 
 export async function updateAccount(
   id: string,
-  fields: Partial<Pick<WaAccount, 'qr_code' | 'is_connected' | 'phone_number' | 'status'>>
+  fields: Partial<Pick<WaAccount, 'qr_code' | 'qr_generated_at' | 'qr_expires_at' | 'is_connected' | 'phone_number' | 'status'>>
 ): Promise<void> {
   const keys = Object.keys(fields);
   if (keys.length === 0) return;
@@ -73,11 +74,11 @@ export async function createBinding(params: {
 }
 
 export async function getActiveBindings(waAccountId: string): Promise<WaBinding[]> {
-  const { rows } = await pool.query<WaBinding>(
+  const { rows } = await pool.query<WaBinding[]>(
     `SELECT * FROM wa_account_bindings WHERE wa_account_id = $1 AND is_active = TRUE`,
     [waAccountId]
   );
-  return rows;
+  return rows as unknown as WaBinding[];
 }
 
 export async function isAiEnabled(tenantId: string): Promise<boolean> {
@@ -85,10 +86,9 @@ export async function isAiEnabled(tenantId: string): Promise<boolean> {
     `SELECT ai_enabled, manual_mode FROM wa_controls WHERE scope IN ('global', $1) ORDER BY scope = 'global' DESC`,
     [tenantId]
   );
-  // Global switch off -> always off. Otherwise fall back to the tenant row (default: on, not manual).
-  const global = rows.find((_r, i) => i === rows.length - 1); // last row after ordering is global if present
+  const global = rows.find((r) => r.ai_enabled === false && r.manual_mode === r.manual_mode);
   if (global && global.ai_enabled === false) return false;
-  const tenantRow = rows.find((r) => true) ?? { ai_enabled: true, manual_mode: false };
+  const tenantRow = rows[0] ?? { ai_enabled: true, manual_mode: false };
   return tenantRow.ai_enabled && !tenantRow.manual_mode;
 }
 
