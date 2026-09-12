@@ -12,6 +12,7 @@ import { mediaRouter } from './routes/media.js';
 import { callsRouter } from './routes/calls.js';
 import { healthRouter } from './routes/health.js';
 import { pool } from './db/pool.js';
+import { initializeDatabase } from './db/init.js';
 import { listAccounts } from './db/accounts.js';
 import { restoreConnectableSessions, shutdownSession } from './whatsapp/session-manager.js';
 
@@ -49,43 +50,55 @@ app.use((err: unknown, _req: express.Request, res: express.Response, _next: expr
   res.status(500).json({ error: 'INTERNAL_ERROR' });
 });
 
-const server = app.listen(config.port, async () => {
-  logger.info(`NahaLabs WhatsApp Operator listening on port ${config.port}`);
-  await restoreConnectableSessions();
-});
+async function main(): Promise<void> {
+  // Bring fresh or upgraded databases to the expected schema automatically.
+  // The schema itself is idempotent, so this is safe on every deployment.
+  await initializeDatabase();
+  logger.info('NahaLabs WhatsApp Operator database schema is ready');
 
-let shuttingDown = false;
-
-async function gracefulShutdown(signal: string): Promise<void> {
-  if (shuttingDown) return;
-  shuttingDown = true;
-  logger.info({ signal }, 'Graceful shutdown started');
-
-  const forceExit = setTimeout(() => {
-    logger.error('Graceful shutdown timed out; forcing process exit');
-    process.exit(1);
-  }, 15_000);
-  forceExit.unref();
-
-  server.close((err) => {
-    if (err) logger.warn({ err }, 'HTTP server close reported an error');
+  const server = app.listen(config.port, async () => {
+    logger.info(`NahaLabs WhatsApp Operator listening on port ${config.port}`);
+    await restoreConnectableSessions();
   });
 
-  try {
-    const accounts = await listAccounts();
-    await Promise.all(accounts.map((account) => shutdownSession(account.id).catch((err) => {
-      logger.warn({ err, waAccountId: account.id }, 'Failed to stop WhatsApp socket during shutdown');
-    })));
-    await pool.end();
-    clearTimeout(forceExit);
-    logger.info('Graceful shutdown complete; persisted WhatsApp credentials were preserved');
-    process.exit(0);
-  } catch (err) {
-    clearTimeout(forceExit);
-    logger.error({ err }, 'Graceful shutdown failed');
-    process.exit(1);
+  let shuttingDown = false;
+
+  async function gracefulShutdown(signal: string): Promise<void> {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    logger.info({ signal }, 'Graceful shutdown started');
+
+    const forceExit = setTimeout(() => {
+      logger.error('Graceful shutdown timed out; forcing process exit');
+      process.exit(1);
+    }, 15_000);
+    forceExit.unref();
+
+    server.close((err) => {
+      if (err) logger.warn({ err }, 'HTTP server close reported an error');
+    });
+
+    try {
+      const accounts = await listAccounts();
+      await Promise.all(accounts.map((account) => shutdownSession(account.id).catch((err) => {
+        logger.warn({ err, waAccountId: account.id }, 'Failed to stop WhatsApp socket during shutdown');
+      })));
+      await pool.end();
+      clearTimeout(forceExit);
+      logger.info('Graceful shutdown complete; persisted WhatsApp credentials were preserved');
+      process.exit(0);
+    } catch (err) {
+      clearTimeout(forceExit);
+      logger.error({ err }, 'Graceful shutdown failed');
+      process.exit(1);
+    }
   }
+
+  process.once('SIGTERM', () => void gracefulShutdown('SIGTERM'));
+  process.once('SIGINT', () => void gracefulShutdown('SIGINT'));
 }
 
-process.once('SIGTERM', () => void gracefulShutdown('SIGTERM'));
-process.once('SIGINT', () => void gracefulShutdown('SIGINT'));
+main().catch((err) => {
+  logger.fatal({ err }, 'Operator startup failed');
+  process.exit(1);
+});
