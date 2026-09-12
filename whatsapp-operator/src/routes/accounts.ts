@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { createAccount, getAccount, createBinding } from '../db/accounts.js';
+import { asyncHandler } from '../middleware/async-handler.js';
 import { resetSession, startSession, stopSession } from '../whatsapp/session-manager.js';
 
 export const accountsRouter = Router();
@@ -14,11 +15,8 @@ function validateProductionWebhookUrl(webhookUrl: string): boolean {
   }
 }
 
-/**
- * Create a WhatsApp account and bind it to an application tenant.
- * POST /accounts { label?, appId, tenantId, webhookUrl }
- */
-accountsRouter.post('/', async (req, res) => {
+/** Create a WhatsApp account and bind it to an application tenant. */
+accountsRouter.post('/', asyncHandler(async (req, res) => {
   const { label, appId, tenantId, webhookUrl } = req.body ?? {};
 
   if (!appId || !tenantId || !webhookUrl) {
@@ -39,75 +37,62 @@ accountsRouter.post('/', async (req, res) => {
 
   const account = await createAccount(label);
   await createBinding({ waAccountId: account.id, appId, tenantId, webhookUrl });
-
   res.status(201).json({ waAccountId: account.id, status: account.status });
-});
+}));
 
 /** Starts the WhatsApp socket and begins generating a QR code. */
-accountsRouter.post('/:id/connect', async (req, res) => {
+accountsRouter.post('/:id/connect', asyncHandler(async (req, res) => {
   const account = await getAccount(req.params.id);
   if (!account) {
     res.status(404).json({ error: 'NOT_FOUND' });
     return;
   }
-
   await startSession(account.id);
   res.json({ waAccountId: account.id, status: 'connecting' });
-});
+}));
 
 /** Poll while pairing; refresh at least every few seconds. */
-accountsRouter.get('/:id/qr', async (req, res) => {
+accountsRouter.get('/:id/qr', asyncHandler(async (req, res) => {
   const account = await getAccount(req.params.id);
   if (!account) {
     res.status(404).json({ error: 'NOT_FOUND' });
     return;
   }
+  res.json({ status: account.status, isConnected: account.is_connected, qrCode: account.qr_code });
+}));
 
-  res.json({
-    status: account.status,
-    isConnected: account.is_connected,
-    qrCode: account.qr_code,
-  });
-});
-
-accountsRouter.get('/:id/status', async (req, res) => {
+accountsRouter.get('/:id/status', asyncHandler(async (req, res) => {
   const account = await getAccount(req.params.id);
   if (!account) {
     res.status(404).json({ error: 'NOT_FOUND' });
     return;
   }
-
   res.json({
     waAccountId: account.id,
     status: account.status,
     isConnected: account.is_connected,
     phoneNumber: account.phone_number,
   });
-});
+}));
 
 /** Logs out and permanently clears saved Baileys credentials for the account. */
-accountsRouter.post('/:id/disconnect', async (req, res) => {
+accountsRouter.post('/:id/disconnect', asyncHandler(async (req, res) => {
   const account = await getAccount(req.params.id);
   if (!account) {
     res.status(404).json({ error: 'NOT_FOUND' });
     return;
   }
-
   await stopSession(account.id);
   res.json({ waAccountId: account.id, status: 'logged_out' });
-});
+}));
 
-/**
- * Reset an account to a clean, unpaired state. This is the recovery endpoint
- * recommended by the reference playbook when authentication state is bad.
- */
-accountsRouter.post('/:id/reset', async (req, res) => {
+/** Reset to a clean, unpaired state and require a fresh QR scan. */
+accountsRouter.post('/:id/reset', asyncHandler(async (req, res) => {
   const account = await getAccount(req.params.id);
   if (!account) {
     res.status(404).json({ error: 'NOT_FOUND' });
     return;
   }
-
   await resetSession(account.id);
   res.json({ waAccountId: account.id, status: 'pending' });
-});
+}));
