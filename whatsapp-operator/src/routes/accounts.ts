@@ -1,13 +1,22 @@
 import { Router } from 'express';
 import { createAccount, getAccount, createBinding } from '../db/accounts.js';
-import { startSession, stopSession } from '../whatsapp/session-manager.js';
+import { resetSession, startSession, stopSession } from '../whatsapp/session-manager.js';
 
 export const accountsRouter = Router();
 
+function validateProductionWebhookUrl(webhookUrl: string): boolean {
+  if (process.env.NODE_ENV !== 'production') return true;
+  try {
+    const url = new URL(webhookUrl);
+    return url.protocol === 'https:' && url.hostname !== 'localhost' && url.hostname !== '127.0.0.1';
+  } catch {
+    return false;
+  }
+}
+
 /**
- * Called once when a business owner clicks "Connect WhatsApp" in your app's dashboard.
- * POST /accounts  { label?, appId, tenantId, webhookUrl }
- * -> { waAccountId, status }
+ * Create a WhatsApp account and bind it to an application tenant.
+ * POST /accounts { label?, appId, tenantId, webhookUrl }
  */
 accountsRouter.post('/', async (req, res) => {
   const { label, appId, tenantId, webhookUrl } = req.body ?? {};
@@ -20,16 +29,21 @@ accountsRouter.post('/', async (req, res) => {
     return;
   }
 
+  if (!validateProductionWebhookUrl(webhookUrl)) {
+    res.status(400).json({
+      error: 'VALIDATION_ERROR',
+      message: 'Production webhookUrl must be a valid public HTTPS URL',
+    });
+    return;
+  }
+
   const account = await createAccount(label);
   await createBinding({ waAccountId: account.id, appId, tenantId, webhookUrl });
 
   res.status(201).json({ waAccountId: account.id, status: account.status });
 });
 
-/**
- * Starts (or resumes) the WhatsApp socket for this account.
- * Call this, then start polling GET /accounts/:id/qr.
- */
+/** Starts the WhatsApp socket and begins generating a QR code. */
 accountsRouter.post('/:id/connect', async (req, res) => {
   const account = await getAccount(req.params.id);
   if (!account) {
@@ -41,10 +55,7 @@ accountsRouter.post('/:id/connect', async (req, res) => {
   res.json({ waAccountId: account.id, status: 'connecting' });
 });
 
-/**
- * Poll this every 2-3 seconds from the dashboard while status is "qr_ready".
- * Render qrCode (a data: URL) directly in an <img> tag for the owner to scan.
- */
+/** Poll while pairing; refresh at least every few seconds. */
 accountsRouter.get('/:id/qr', async (req, res) => {
   const account = await getAccount(req.params.id);
   if (!account) {
@@ -74,7 +85,7 @@ accountsRouter.get('/:id/status', async (req, res) => {
   });
 });
 
-/** Logs the WhatsApp session out. Owner will need to re-scan a fresh QR code. */
+/** Logs out and permanently clears saved Baileys credentials for the account. */
 accountsRouter.post('/:id/disconnect', async (req, res) => {
   const account = await getAccount(req.params.id);
   if (!account) {
@@ -84,4 +95,19 @@ accountsRouter.post('/:id/disconnect', async (req, res) => {
 
   await stopSession(account.id);
   res.json({ waAccountId: account.id, status: 'logged_out' });
+});
+
+/**
+ * Reset an account to a clean, unpaired state. This is the recovery endpoint
+ * recommended by the reference playbook when authentication state is bad.
+ */
+accountsRouter.post('/:id/reset', async (req, res) => {
+  const account = await getAccount(req.params.id);
+  if (!account) {
+    res.status(404).json({ error: 'NOT_FOUND' });
+    return;
+  }
+
+  await resetSession(account.id);
+  res.json({ waAccountId: account.id, status: 'pending' });
 });
