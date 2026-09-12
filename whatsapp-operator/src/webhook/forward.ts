@@ -7,15 +7,16 @@ import { signPayload } from '../security/hmac.js';
 const logger = pino({ level: config.logLevel });
 const MAX_ATTEMPTS = 3;
 
-/**
- * Deliver each inbound WhatsApp event to every active app/tenant binding.
- * Failed delivery is retried and then persisted to a durable dead-letter table.
- */
 export async function forwardInboundMessage(waAccountId: string, message: unknown): Promise<void> {
+  await forwardEvent(waAccountId, 'message', message);
+}
+
+/** Forward connection, call, receipt, reaction, presence, contact and group events through the same signed webhook. */
+export async function forwardEvent(waAccountId: string, event: string, data: unknown): Promise<void> {
   const bindings = await getActiveBindings(waAccountId);
 
   if (bindings.length === 0) {
-    logger.warn({ waAccountId }, 'No active binding for this account — message received but dropped');
+    logger.warn({ waAccountId, event }, 'No active binding for this account — event received but dropped');
     return;
   }
 
@@ -25,7 +26,8 @@ export async function forwardInboundMessage(waAccountId: string, message: unknow
         waAccountId,
         appId: binding.app_id,
         tenantId: binding.tenant_id,
-        message,
+        event,
+        data,
         deliveredAt: new Date().toISOString(),
       };
       await deliverWithRetry(waAccountId, binding, payload);
