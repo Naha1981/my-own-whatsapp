@@ -6,7 +6,7 @@ import pino from 'pino';
 import { config } from '../config.js';
 import { clearPostgresAuthState, usePostgresAuthState } from './auth-state.js';
 import { updateAccount, listConnectableAccounts } from '../db/accounts.js';
-import { forwardInboundMessage } from '../webhook/forward.js';
+import { forwardEvent, forwardInboundMessage } from '../webhook/forward.js';
 
 const logger = pino({ level: config.logLevel });
 const RECONNECT_DELAY_MS = 5_000;
@@ -144,9 +144,7 @@ async function requestPairingCodeOnce(waAccountId: string, normalizedPhoneNumber
 
   pairingModeRequested.add(waAccountId);
   try {
-    if (!sockets.has(waAccountId)) {
-      await startSession(waAccountId);
-    }
+    if (!sockets.has(waAccountId)) await startSession(waAccountId);
 
     const deadline = Date.now() + PAIRING_READY_TIMEOUT_MS;
     while (Date.now() < deadline) {
@@ -227,7 +225,6 @@ export async function startSession(waAccountId: string): Promise<void> {
     auth: state,
     ...(version ? { version } : {}),
     printQRInTerminal: false,
-    browser: ['NahaLabs Operator', 'Chrome', '120.0.0.0'],
     qrTimeout: QR_LIFETIME_MS,
     syncFullHistory: false,
     markOnlineOnConnect: true,
@@ -374,6 +371,60 @@ export async function startSession(waAccountId: string): Promise<void> {
         logger.error({ err, waAccountId }, 'Failed to forward inbound message to Brain app')
       );
     }
+  });
+
+  sock.ev.on('messages.reaction', async (data) => {
+    await forwardEvent(waAccountId, 'message.reaction', data).catch((err) =>
+      logger.error({ err, waAccountId }, 'Failed to forward message reaction event')
+    );
+  });
+
+  sock.ev.on('message-receipt.update', async (data) => {
+    await forwardEvent(waAccountId, 'message.receipt', data).catch((err) =>
+      logger.error({ err, waAccountId }, 'Failed to forward message receipt event')
+    );
+  });
+
+  sock.ev.on('contacts.upsert', async (data) => {
+    await forwardEvent(waAccountId, 'contacts.upsert', data).catch((err) =>
+      logger.error({ err, waAccountId }, 'Failed to forward contact event')
+    );
+  });
+
+  sock.ev.on('contacts.update', async (data) => {
+    await forwardEvent(waAccountId, 'contacts.update', data).catch((err) =>
+      logger.error({ err, waAccountId }, 'Failed to forward contact update event')
+    );
+  });
+
+  sock.ev.on('presence.update', async (data) => {
+    await forwardEvent(waAccountId, 'presence.update', data).catch((err) =>
+      logger.error({ err, waAccountId }, 'Failed to forward presence event')
+    );
+  });
+
+  sock.ev.on('groups.upsert', async (data) => {
+    await forwardEvent(waAccountId, 'groups.upsert', data).catch((err) =>
+      logger.error({ err, waAccountId }, 'Failed to forward group event')
+    );
+  });
+
+  sock.ev.on('groups.update', async (data) => {
+    await forwardEvent(waAccountId, 'groups.update', data).catch((err) =>
+      logger.error({ err, waAccountId }, 'Failed to forward group update event')
+    );
+  });
+
+  sock.ev.on('group-participants.update', async (data) => {
+    await forwardEvent(waAccountId, 'group-participants.update', data).catch((err) =>
+      logger.error({ err, waAccountId }, 'Failed to forward group participant event')
+    );
+  });
+
+  sock.ev.on('call', async (data) => {
+    await forwardEvent(waAccountId, 'call', data).catch((err) =>
+      logger.error({ err, waAccountId }, 'Failed to forward incoming call event')
+    );
   });
 }
 
