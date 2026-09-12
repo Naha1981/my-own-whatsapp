@@ -1,6 +1,10 @@
 name: Render keepalive
 
 on:
+  # Also run after changes so a freshly deployed Operator gets an immediate
+  # reachability check instead of waiting for the next scheduled heartbeat.
+  push:
+    branches: [main]
   schedule:
     # Keep a 10-minute heartbeat, offset from common cron boundaries.
     - cron: '3/10 * * * *'
