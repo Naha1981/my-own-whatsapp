@@ -12,7 +12,8 @@ import { mediaRouter } from './routes/media.js';
 import { callsRouter } from './routes/calls.js';
 import { healthRouter } from './routes/health.js';
 import { pool } from './db/pool.js';
-import { restoreConnectableSessions, shutdownSessions } from './whatsapp/session-manager.js';
+import { listAccounts } from './db/accounts.js';
+import { restoreConnectableSessions, stopSession } from './whatsapp/session-manager.js';
 
 const logger = pino({ level: config.logLevel });
 const app = express();
@@ -71,7 +72,10 @@ async function gracefulShutdown(signal: string): Promise<void> {
   });
 
   try {
-    await shutdownSessions();
+    const accounts = await listAccounts();
+    await Promise.all(accounts.map((account) => stopSession(account.id).catch((err) => {
+      logger.warn({ err, waAccountId: account.id }, 'Failed to stop WhatsApp session during shutdown');
+    })));
     await pool.end();
     clearTimeout(forceExit);
     logger.info('Graceful shutdown complete');
