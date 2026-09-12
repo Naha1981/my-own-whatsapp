@@ -16,7 +16,6 @@ CREATE TABLE IF NOT EXISTS wa_accounts (
   updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Safe migration for databases created before QR expiry metadata existed.
 ALTER TABLE wa_accounts ADD COLUMN IF NOT EXISTS qr_generated_at TIMESTAMPTZ;
 ALTER TABLE wa_accounts ADD COLUMN IF NOT EXISTS qr_expires_at TIMESTAMPTZ;
 
@@ -42,11 +41,14 @@ CREATE TABLE IF NOT EXISTS wa_account_bindings (
   wa_account_id  UUID NOT NULL REFERENCES wa_accounts(id) ON DELETE CASCADE,
   app_id         TEXT NOT NULL,
   tenant_id      TEXT NOT NULL,
-  webhook_url    TEXT NOT NULL,
+  webhook_url    TEXT,
   is_active      BOOLEAN NOT NULL DEFAULT TRUE,
   created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (wa_account_id, app_id, tenant_id)
 );
+
+-- Safe migration: the webhook is optional during first-time WhatsApp setup.
+ALTER TABLE wa_account_bindings ALTER COLUMN webhook_url DROP NOT NULL;
 
 CREATE TABLE IF NOT EXISTS wa_controls (
   scope          TEXT PRIMARY KEY,
@@ -67,12 +69,14 @@ CREATE TABLE IF NOT EXISTS wa_webhook_dead_letters (
   wa_account_id  UUID NOT NULL REFERENCES wa_accounts(id) ON DELETE CASCADE,
   app_id         TEXT NOT NULL,
   tenant_id      TEXT NOT NULL,
-  webhook_url    TEXT NOT NULL,
+  webhook_url    TEXT,
   payload        JSONB NOT NULL,
   last_error     TEXT,
   attempts       INTEGER NOT NULL DEFAULT 3,
   created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE wa_webhook_dead_letters ALTER COLUMN webhook_url DROP NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_bindings_account ON wa_account_bindings(wa_account_id);
 CREATE INDEX IF NOT EXISTS idx_bindings_app_tenant ON wa_account_bindings(app_id, tenant_id);
