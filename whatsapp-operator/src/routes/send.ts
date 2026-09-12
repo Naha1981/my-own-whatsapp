@@ -39,10 +39,6 @@ function quotedMessage(value: unknown): WAMessage | undefined {
   return value as WAMessage;
 }
 
-/**
- * Text remains backwards compatible. Rich message types use Baileys' native
- * sendMessage content contract, while the application still talks only to HTTP.
- */
 sendRouter.post('/', requireAccountAccess((req) => String(req.body?.waAccountId ?? '') || undefined), async (req, res) => {
   const body = req.body ?? {};
   const { waAccountId, to, type = 'text' } = body;
@@ -121,7 +117,7 @@ sendRouter.post('/', requireAccountAccess((req) => String(req.body?.waAccountId 
             throw new Error('poll values must contain 2–12 options');
           }
           const values = body.values.map((value: unknown) => requiredString(value, 'poll option'));
-          if (new Set(values.map((value) => value.toLowerCase())).size !== values.length) {
+          if (new Set(values.map((value: string) => value.toLowerCase())).size !== values.length) {
             throw new Error('poll options must be unique');
           }
           const selectableCount = Number(body.selectableCount ?? 1);
