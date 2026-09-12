@@ -9,9 +9,8 @@ import { forwardInboundMessage } from '../webhook/forward.js';
 
 const logger = pino({ level: config.logLevel });
 const RECONNECT_DELAY_MS = 5_000;
+const VERSION_FETCH_TIMEOUT_MS = 15_000;
 
-// One persistent socket per WhatsApp account. Run one Operator process unless
-// cross-instance socket ownership/locking is added later.
 const sockets = new Map<string, WASocket>();
 const stopping = new Set<string>();
 
@@ -19,13 +18,41 @@ export function getSocket(waAccountId: string): WASocket | undefined {
   return sockets.get(waAccountId);
 }
 
-async function resolveBaileysVersion(): Promise<number[] | undefined> {
+async function fetchLiveWhatsAppWebVersion(): Promise<number[] | undefined> {
   try {
-    const { version, isLatest } = await fetchLatestBaileysVersion();
-    logger.info({ version: version.join('.'), isLatest }, 'Resolved Baileys WhatsApp Web version');
+    const response = await fetch('https://web.whatsapp.com/sw.js', {
+      method: 'GET',
+      headers: {
+        'sec-fetch-site': 'none',
+        'user-agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36',
+      },
+      signal: AbortSignal.timeout(VERSION_FETCH_TIMEOUT_MS),
+    });
+    if (!response.ok) throw new Error(`WhatsApp Web sw.js returned HTTP ${response.status}`);
+
+    const body = await response.text();
+    const match = body.match(/\\?"client_revision\\?":\s*(\d+)/);
+    if (!match?.[1]) throw new Error('client_revision not found in WhatsApp Web sw.js');
+
+    const version = [2, 3000, Number(match[1])];
+    logger.info({ version: version.join('.') }, 'Resolved live WhatsApp Web version');
     return version;
   } catch (err) {
-    logger.warn({ err }, 'Failed to resolve latest Baileys version; using library fallback');
+    logger.warn({ err }, 'Live WhatsApp Web version lookup failed');
+    return undefined;
+  }
+}
+
+async function resolveBaileysVersion(): Promise<number[] | undefined> {
+  const liveVersion = await fetchLiveWhatsAppWebVersion();
+  if (liveVersion) return liveVersion;
+
+  try {
+    const { version, isLatest } = await fetchLatestBaileysVersion();
+    logger.info({ version: version.join('.'), isLatest }, 'Resolved Baileys repository WhatsApp Web version');
+    return version;
+  } catch (err) {
+    logger.warn({ err }, 'Baileys repository version lookup failed; using library internal fallback');
     return undefined;
   }
 }
@@ -79,12 +106,13 @@ export async function startSession(waAccountId: string): Promise<void> {
     }
 
     if (connection === 'close') {
-      // The PDF specifically requires the disconnect reason to be logged before
-      // any stale-socket guard because statusCode is the key diagnostic signal.
       const statusCode = (lastDisconnect?.error as Boom | undefined)?.output?.statusCode;
       const errorMessage = lastDisconnect?.error instanceof Error
         ? lastDisconnect.error.message
         : String(lastDisconnect?.error ?? 'unknown');
+
+      // Keep this before the stale-socket guard: the PDF's playbook depends on
+      // seeing every close reason, including closes from replaced sockets.
       logger.warn({ waAccountId, statusCode, errorMessage }, 'WhatsApp connection closed');
 
       const isCurrentSocket = sockets.get(waAccountId) === sock;
@@ -101,7 +129,7 @@ export async function startSession(waAccountId: string): Promise<void> {
       }
 
       const loggedOut = statusCode === DisconnectReason.loggedOut;
-      const badSession = statusCode === 500;
+      const badSession = statusCode === DisconnectReason.badSession || statusCode === 500;
 
       if (loggedOut || badSession) {
         await clearPostgresAuthState(waAccountId);
@@ -117,7 +145,7 @@ export async function startSession(waAccountId: string): Promise<void> {
           return;
         }
 
-        logger.warn({ waAccountId, statusCode }, 'Bad session (500) — credentials purged; restarting clean session');
+        logger.warn({ waAccountId, statusCode }, 'Bad session — credentials purged; restarting clean session');
         setTimeout(() => {
           startSession(waAccountId).catch((err) =>
             logger.error({ err, waAccountId }, 'Clean-session restart failed')
@@ -148,8 +176,6 @@ export async function startSession(waAccountId: string): Promise<void> {
     }
   });
 
-  // Low-level pairing-success event is intentionally logged. This lets us tell
-  // a valid QR from a WhatsApp-side refusal of the device link.
   (sock.ev as any).on('CB:iq,,pair-success', (node: unknown) => {
     logger.info({ waAccountId, node }, 'WhatsApp pairing success received');
   });
@@ -205,7 +231,6 @@ export async function sendMessage(waAccountId: string, to: string, text: string)
   return sock.sendMessage(jid, { text });
 }
 
-/** Called once on boot to reconnect every account that has saved credentials. */
 export async function restoreConnectableSessions(): Promise<void> {
   const accounts = await listConnectableAccounts();
   for (const account of accounts) {
