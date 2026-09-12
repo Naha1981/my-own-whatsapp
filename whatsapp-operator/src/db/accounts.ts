@@ -81,11 +81,11 @@ export async function createBinding(params: {
 }
 
 export async function getActiveBindings(waAccountId: string): Promise<WaBinding[]> {
-  const { rows } = await pool.query<WaBinding[]>(
+  const { rows } = await pool.query<WaBinding>(
     `SELECT * FROM wa_account_bindings WHERE wa_account_id = $1 AND is_active = TRUE`,
     [waAccountId]
   );
-  return rows as unknown as WaBinding[];
+  return rows;
 }
 
 export async function isAiEnabled(tenantId: string): Promise<boolean> {
