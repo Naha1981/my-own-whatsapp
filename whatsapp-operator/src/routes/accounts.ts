@@ -37,19 +37,16 @@ accountsRouter.get('/', asyncHandler(async (_req, res) => {
   });
 }));
 
-/** Create a WhatsApp account and bind it to an application tenant. */
+/** Create a WhatsApp account. App/tenant scope defaults make the first-time setup beginner-friendly. */
 accountsRouter.post('/', asyncHandler(async (req, res) => {
-  const { label, appId, tenantId, webhookUrl } = req.body ?? {};
+  const body = req.body ?? {};
+  const label = String(body.label ?? '').trim() || 'NahaLabs WhatsApp';
+  const appId = String(body.appId ?? '').trim() || 'nahalabs';
+  const tenantId = String(body.tenantId ?? '').trim() || 'default';
+  const webhookUrlRaw = String(body.webhookUrl ?? '').trim();
+  const webhookUrl = webhookUrlRaw || null;
 
-  if (!appId || !tenantId || !webhookUrl) {
-    res.status(400).json({
-      error: 'VALIDATION_ERROR',
-      message: 'appId, tenantId and webhookUrl are required',
-    });
-    return;
-  }
-
-  if (!validateProductionWebhookUrl(webhookUrl)) {
+  if (webhookUrl && !validateProductionWebhookUrl(webhookUrl)) {
     res.status(400).json({
       error: 'VALIDATION_ERROR',
       message: 'Production webhookUrl must be a valid public HTTPS URL',
@@ -59,7 +56,16 @@ accountsRouter.post('/', asyncHandler(async (req, res) => {
 
   const account = await createAccount(label);
   await createBinding({ waAccountId: account.id, appId, tenantId, webhookUrl });
-  res.status(201).json({ waAccountId: account.id, status: account.status });
+  res.status(201).json({
+    waAccountId: account.id,
+    status: account.status,
+    appId,
+    tenantId,
+    webhookConfigured: Boolean(webhookUrl),
+    message: webhookUrl
+      ? 'Account created and connected to the supplied application webhook.'
+      : 'Account created. WhatsApp can be connected now; the application webhook can be configured later.',
+  });
 }));
 
 /** Starts the WhatsApp socket and begins generating a QR code. */
@@ -187,13 +193,7 @@ accountsRouter.get('/:id/qr.png', requireAccountAccess((req) => req.params.id), 
 
   const separator = account.qr_code.indexOf(',');
   const base64 = separator >= 0 ? account.qr_code.slice(separator + 1) : account.qr_code;
-  let png: Buffer;
-  try {
-    png = Buffer.from(base64, 'base64');
-  } catch {
-    res.status(500).json({ error: 'QR_DECODE_FAILED' });
-    return;
-  }
+  const png = Buffer.from(base64, 'base64');
 
   setNoStore(res);
   res.type('png');
