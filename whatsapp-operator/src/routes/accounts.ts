@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { createAccount, getAccount, listAccounts, createBinding } from '../db/accounts.js';
 import { asyncHandler } from '../middleware/async-handler.js';
+import { requireAccountAccess } from '../middleware/account-access.js';
 import { getPairingCode, requestPairingCode, resetSession, startSession, stopSession } from '../whatsapp/session-manager.js';
 
 export const accountsRouter = Router();
@@ -62,7 +63,7 @@ accountsRouter.post('/', asyncHandler(async (req, res) => {
 }));
 
 /** Starts the WhatsApp socket and begins generating a QR code. */
-accountsRouter.post('/:id/connect', asyncHandler(async (req, res) => {
+accountsRouter.post('/:id/connect', requireAccountAccess((req) => req.params.id), asyncHandler(async (req, res) => {
   const account = await getAccount(req.params.id);
   if (!account) {
     res.status(404).json({ error: 'NOT_FOUND' });
@@ -73,7 +74,7 @@ accountsRouter.post('/:id/connect', asyncHandler(async (req, res) => {
 }));
 
 /** Request a WhatsApp Web phone-number pairing code instead of scanning QR. */
-accountsRouter.post('/:id/pairing-code', asyncHandler(async (req, res) => {
+accountsRouter.post('/:id/pairing-code', requireAccountAccess((req) => req.params.id), asyncHandler(async (req, res) => {
   const account = await getAccount(req.params.id);
   if (!account) {
     res.status(404).json({ error: 'NOT_FOUND' });
@@ -129,7 +130,7 @@ accountsRouter.post('/:id/pairing-code', asyncHandler(async (req, res) => {
 }));
 
 /** Return the currently active phone pairing code, if one exists. */
-accountsRouter.get('/:id/pairing-code', asyncHandler(async (req, res) => {
+accountsRouter.get('/:id/pairing-code', requireAccountAccess((req) => req.params.id), asyncHandler(async (req, res) => {
   const account = await getAccount(req.params.id);
   if (!account) {
     res.status(404).json({ error: 'NOT_FOUND' });
@@ -149,7 +150,7 @@ accountsRouter.get('/:id/pairing-code', asyncHandler(async (req, res) => {
 }));
 
 /** Poll every ~3 seconds while QR pairing. QR responses are never cacheable. */
-accountsRouter.get('/:id/qr', asyncHandler(async (req, res) => {
+accountsRouter.get('/:id/qr', requireAccountAccess((req) => req.params.id), asyncHandler(async (req, res) => {
   const account = await getAccount(req.params.id);
   if (!account) {
     res.status(404).json({ error: 'NOT_FOUND' });
@@ -171,7 +172,7 @@ accountsRouter.get('/:id/qr', asyncHandler(async (req, res) => {
 }));
 
 /** Direct PNG endpoint for frontends that prefer <img src> over a data URL. */
-accountsRouter.get('/:id/qr.png', asyncHandler(async (req, res) => {
+accountsRouter.get('/:id/qr.png', requireAccountAccess((req) => req.params.id), asyncHandler(async (req, res) => {
   const account = await getAccount(req.params.id);
   if (!account) {
     res.status(404).json({ error: 'NOT_FOUND' });
@@ -199,7 +200,7 @@ accountsRouter.get('/:id/qr.png', asyncHandler(async (req, res) => {
   res.send(png);
 }));
 
-accountsRouter.get('/:id/status', asyncHandler(async (req, res) => {
+accountsRouter.get('/:id/status', requireAccountAccess((req) => req.params.id), asyncHandler(async (req, res) => {
   const account = await getAccount(req.params.id);
   if (!account) {
     res.status(404).json({ error: 'NOT_FOUND' });
@@ -214,7 +215,7 @@ accountsRouter.get('/:id/status', asyncHandler(async (req, res) => {
 }));
 
 /** Logs out and permanently clears saved Baileys credentials for the account. */
-accountsRouter.post('/:id/disconnect', asyncHandler(async (req, res) => {
+accountsRouter.post('/:id/disconnect', requireAccountAccess((req) => req.params.id), asyncHandler(async (req, res) => {
   const account = await getAccount(req.params.id);
   if (!account) {
     res.status(404).json({ error: 'NOT_FOUND' });
@@ -225,7 +226,7 @@ accountsRouter.post('/:id/disconnect', asyncHandler(async (req, res) => {
 }));
 
 /** Reset to a clean, unpaired state and require a fresh QR scan or pairing code. */
-accountsRouter.post('/:id/reset', asyncHandler(async (req, res) => {
+accountsRouter.post('/:id/reset', requireAccountAccess((req) => req.params.id), asyncHandler(async (req, res) => {
   const account = await getAccount(req.params.id);
   if (!account) {
     res.status(404).json({ error: 'NOT_FOUND' });
