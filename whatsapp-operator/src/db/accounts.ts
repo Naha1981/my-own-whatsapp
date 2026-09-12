@@ -74,22 +74,26 @@ export async function createBinding(params: {
 }
 
 export async function getActiveBindings(waAccountId: string): Promise<WaBinding[]> {
-  const { rows } = await pool.query<WaBinding[]>(
+  const { rows } = await pool.query<WaBinding>(
     `SELECT * FROM wa_account_bindings WHERE wa_account_id = $1 AND is_active = TRUE`,
     [waAccountId]
   );
-  return rows as unknown as WaBinding[];
+  return rows;
 }
 
 export async function isAiEnabled(tenantId: string): Promise<boolean> {
-  const { rows } = await pool.query<{ ai_enabled: boolean; manual_mode: boolean }>(
-    `SELECT ai_enabled, manual_mode FROM wa_controls WHERE scope IN ('global', $1) ORDER BY scope = 'global' DESC`,
+  const { rows } = await pool.query<{ scope: string; ai_enabled: boolean; manual_mode: boolean }>(
+    `SELECT scope, ai_enabled, manual_mode
+       FROM wa_controls
+      WHERE scope IN ('global', $1)
+      ORDER BY CASE WHEN scope = $1 THEN 0 ELSE 1 END`,
     [tenantId]
   );
-  const global = rows.find((r) => r.ai_enabled === false && r.manual_mode === r.manual_mode);
-  if (global && global.ai_enabled === false) return false;
-  const tenantRow = rows[0] ?? { ai_enabled: true, manual_mode: false };
-  return tenantRow.ai_enabled && !tenantRow.manual_mode;
+  const tenantRow = rows.find((row) => row.scope === tenantId);
+  const globalRow = rows.find((row) => row.scope === 'global');
+  if (globalRow?.ai_enabled === false || globalRow?.manual_mode === true) return false;
+  const effective = tenantRow ?? { ai_enabled: true, manual_mode: false };
+  return effective.ai_enabled && !effective.manual_mode;
 }
 
 export async function isBlocked(tenantId: string, phoneNumber: string): Promise<boolean> {
