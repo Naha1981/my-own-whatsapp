@@ -7,10 +7,12 @@ import { config } from './config.js';
 import { requireApiKey } from './middleware/auth.js';
 import { accountsRouter } from './routes/accounts.js';
 import { sendRouter } from './routes/send.js';
+import { messagesRouter } from './routes/messages.js';
 import { mediaRouter } from './routes/media.js';
 import { callsRouter } from './routes/calls.js';
 import { healthRouter } from './routes/health.js';
-import { restoreConnectableSessions } from './whatsapp/session-manager.js';
+import { pool } from './db/pool.js';
+import { restoreConnectableSessions, shutdownSessions } from './whatsapp/session-manager.js';
 
 const logger = pino({ level: config.logLevel });
 const app = express();
@@ -32,6 +34,7 @@ app.get('/operator-console', (_req, res) => {
 // Everything below requires the shared Operator API key.
 app.use('/accounts', requireApiKey, accountsRouter);
 app.use('/send', requireApiKey, sendRouter);
+app.use('/messages', requireApiKey, messagesRouter);
 app.use('/media', requireApiKey, mediaRouter);
 app.use('/calls', requireApiKey, callsRouter);
 
@@ -45,7 +48,40 @@ app.use((err: unknown, _req: express.Request, res: express.Response, _next: expr
   res.status(500).json({ error: 'INTERNAL_ERROR' });
 });
 
-app.listen(config.port, async () => {
+const server = app.listen(config.port, async () => {
   logger.info(`NahaLabs WhatsApp Operator listening on port ${config.port}`);
   await restoreConnectableSessions();
 });
+
+let shuttingDown = false;
+
+async function gracefulShutdown(signal: string): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  logger.info({ signal }, 'Graceful shutdown started');
+
+  const forceExit = setTimeout(() => {
+    logger.error('Graceful shutdown timed out; forcing process exit');
+    process.exit(1);
+  }, 15_000);
+  forceExit.unref();
+
+  server.close((err) => {
+    if (err) logger.warn({ err }, 'HTTP server close reported an error');
+  });
+
+  try {
+    await shutdownSessions();
+    await pool.end();
+    clearTimeout(forceExit);
+    logger.info('Graceful shutdown complete');
+    process.exit(0);
+  } catch (err) {
+    clearTimeout(forceExit);
+    logger.error({ err }, 'Graceful shutdown failed');
+    process.exit(1);
+  }
+}
+
+process.once('SIGTERM', () => void gracefulShutdown('SIGTERM'));
+process.once('SIGINT', () => void gracefulShutdown('SIGINT'));
