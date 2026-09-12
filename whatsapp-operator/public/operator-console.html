@@ -103,11 +103,20 @@
 <script>
 let accounts = [];
 let qrTimer = null;
+let qrObjectUrl = null;
 const $ = id => document.getElementById(id);
 function key() { return $('apiKey').value.trim(); }
 function accountId() { return $('account').value; }
+function scopeHeaders() {
+  const h = {};
+  const appId = $('appId').value.trim();
+  const tenantId = $('tenantId').value.trim();
+  if (appId) h['X-App-Id'] = appId;
+  if (tenantId) h['X-Tenant-Id'] = tenantId;
+  return h;
+}
 function headers(json=false) {
-  const h = { 'X-API-Key': key() };
+  const h = { 'X-API-Key': key(), ...scopeHeaders() };
   if (json) h['Content-Type'] = 'application/json';
   return h;
 }
@@ -125,7 +134,7 @@ async function loadAccounts() {
     const data = await api('/accounts'); accounts = data.accounts || [];
     $('account').innerHTML = accounts.length ? accounts.map(a => `<option value="${a.waAccountId}">${a.label || '(unlabelled)'} — ${a.phoneNumber || 'not paired'} — ${a.status}</option>`).join('') : '<option value="">No accounts yet</option>';
     if (accounts.length) selectAccount();
-    show('globalStatus', `Connected. ${accounts.length} account(s) visible.`);
+    show('globalStatus', `Connected. ${accounts.length} account(s) visible. Enter the matching App ID and Tenant ID to operate an account.`);
   } catch(e) { show('globalStatus', `Console error: ${e.message}`); }
 }
 function selectAccount() { refreshStatus(); refreshPairingCode(); }
@@ -153,7 +162,20 @@ function startQrPolling(){
 }
 async function refreshQr(){
   if(!accountId()) return;
-  try { const d=await api(`/accounts/${accountId()}/qr`); show('qrStatus',`Status: ${d.status}\nConnected: ${d.isConnected}`); const img=$('qr'); if(d.qrImageUrl){ img.src=d.qrImageUrl+`?t=${Date.now()}`; img.hidden=false; } else img.hidden=true; if(d.isConnected && qrTimer){clearInterval(qrTimer);qrTimer=null;} } catch(e){ show('qrStatus',`Error: ${e.message}`); }
+  try {
+    const d=await api(`/accounts/${accountId()}/qr`);
+    show('qrStatus',`Status: ${d.status}\nConnected: ${d.isConnected}`);
+    const img=$('qr');
+    if(d.qrImageUrl){
+      const blobRes = await fetch(d.qrImageUrl+`?t=${Date.now()}`, { headers: headers(false) });
+      if(blobRes.ok){
+        if(qrObjectUrl) URL.revokeObjectURL(qrObjectUrl);
+        qrObjectUrl = URL.createObjectURL(await blobRes.blob());
+        img.src=qrObjectUrl; img.hidden=false;
+      } else img.hidden=true;
+    } else img.hidden=true;
+    if(d.isConnected && qrTimer){clearInterval(qrTimer);qrTimer=null;}
+  } catch(e){ show('qrStatus',`Error: ${e.message}`); }
 }
 async function refreshStatus(){ if(!accountId()) return; try{ show('statusResult',await api(`/accounts/${accountId()}/status`)); }catch(e){show('statusResult',`Error: ${e.message}`);} }
 async function disconnectAccount(){ if(!accountId()) return; if(!confirm('This logs out the WhatsApp account and clears its saved credentials. Continue?')) return; try{ show('statusResult',await api(`/accounts/${accountId()}/disconnect`,{method:'POST'})); await loadAccounts(); }catch(e){show('statusResult',`Error: ${e.message}`);} }
