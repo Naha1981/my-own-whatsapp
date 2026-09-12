@@ -14,7 +14,7 @@ RUN apt-get update \
  && git config --global url."https://github.com/".insteadOf "git@github.com:"
 WORKDIR /app
 COPY package.json package-lock.json* ./
-RUN npm install --no-audit --no-fund
+RUN npm ci --no-audit --no-fund
 COPY . .
 RUN npm run build
 
