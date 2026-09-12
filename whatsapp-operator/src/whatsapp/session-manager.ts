@@ -9,19 +9,41 @@ import { forwardInboundMessage } from '../webhook/forward.js';
 
 const logger = pino({ level: config.logLevel });
 const RECONNECT_DELAY_MS = 5_000;
+const QR_LIFETIME_MS = 20_000;
 const VERSION_FETCH_TIMEOUT_MS = 15_000;
+const QR_SIZE_PX = 512;
 
 const sockets = new Map<string, WASocket>();
 const stopping = new Set<string>();
+const qrExpiryTimers = new Map<string, NodeJS.Timeout>();
 
 export function getSocket(waAccountId: string): WASocket | undefined {
   return sockets.get(waAccountId);
 }
 
+function clearQrExpiryTimer(waAccountId: string): void {
+  const timer = qrExpiryTimers.get(waAccountId);
+  if (timer) clearTimeout(timer);
+  qrExpiryTimers.delete(waAccountId);
+}
+
+function scheduleQrExpiry(waAccountId: string, sock: WASocket): void {
+  clearQrExpiryTimer(waAccountId);
+  const timer = setTimeout(async () => {
+    if (sockets.get(waAccountId) !== sock) return;
+    await updateAccount(waAccountId, {
+      qr_code: null,
+      qr_generated_at: null,
+      qr_expires_at: null,
+      status: 'qr_expired',
+    }).catch((err) => logger.error({ err, waAccountId }, 'Failed to clear expired QR'));
+  }, QR_LIFETIME_MS);
+  qrExpiryTimers.set(waAccountId, timer);
+}
+
 async function fetchLiveWhatsAppWebVersion(): Promise<number[] | undefined> {
   try {
     const response = await fetch('https://web.whatsapp.com/sw.js', {
-      method: 'GET',
       headers: {
         'sec-fetch-site': 'none',
         'user-agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36',
@@ -57,6 +79,19 @@ async function resolveBaileysVersion(): Promise<number[] | undefined> {
   }
 }
 
+async function buildQrDataUrl(qr: string): Promise<string> {
+  return QRCode.toDataURL(qr, {
+    type: 'image/png',
+    width: QR_SIZE_PX,
+    margin: 4,
+    errorCorrectionLevel: 'H',
+    color: {
+      dark: '#000000',
+      light: '#FFFFFF',
+    },
+  });
+}
+
 export async function startSession(waAccountId: string): Promise<void> {
   if (sockets.has(waAccountId)) {
     logger.info({ waAccountId }, 'Session already running, ignoring duplicate start');
@@ -74,7 +109,7 @@ export async function startSession(waAccountId: string): Promise<void> {
     ...(version ? { version } : {}),
     printQRInTerminal: false,
     browser: ['NahaLabs Operator', 'Chrome', '120.0.0.0'],
-    qrTimeout: 20_000,
+    qrTimeout: QR_LIFETIME_MS,
     syncFullHistory: false,
     markOnlineOnConnect: true,
     logger: logger.child({ waAccountId }) as any,
@@ -86,20 +121,34 @@ export async function startSession(waAccountId: string): Promise<void> {
     const { connection, lastDisconnect, qr } = update;
 
     if (qr) {
-      const qrDataUrl = await QRCode.toDataURL(qr);
-      await updateAccount(waAccountId, {
-        qr_code: qrDataUrl,
-        is_connected: false,
-        status: 'qr_ready',
-      });
-      logger.info({ waAccountId }, 'WhatsApp QR generated');
+      try {
+        const qrDataUrl = await buildQrDataUrl(qr);
+        const generatedAt = new Date();
+        const expiresAt = new Date(generatedAt.getTime() + QR_LIFETIME_MS);
+
+        await updateAccount(waAccountId, {
+          qr_code: qrDataUrl,
+          qr_generated_at: generatedAt.toISOString(),
+          qr_expires_at: expiresAt.toISOString(),
+          is_connected: false,
+          status: 'qr_ready',
+        });
+
+        scheduleQrExpiry(waAccountId, sock);
+        logger.info({ waAccountId, qrSizePx: QR_SIZE_PX, expiresAt: expiresAt.toISOString() }, 'WhatsApp QR generated');
+      } catch (err) {
+        logger.error({ err, waAccountId }, 'Failed to encode WhatsApp QR');
+      }
     }
 
     if (connection === 'open') {
+      clearQrExpiryTimer(waAccountId);
       logger.info({ waAccountId }, 'WhatsApp connected');
       await updateAccount(waAccountId, {
         is_connected: true,
         qr_code: null,
+        qr_generated_at: null,
+        qr_expires_at: null,
         phone_number: sock.user?.id?.split(':')[0] ?? null,
         status: 'connected',
       });
@@ -111,18 +160,15 @@ export async function startSession(waAccountId: string): Promise<void> {
         ? lastDisconnect.error.message
         : String(lastDisconnect?.error ?? 'unknown');
 
-      // Keep this before the stale-socket guard: the PDF's playbook depends on
-      // seeing every close reason, including closes from replaced sockets.
       logger.warn({ waAccountId, statusCode, errorMessage }, 'WhatsApp connection closed');
 
       const isCurrentSocket = sockets.get(waAccountId) === sock;
-      if (isCurrentSocket) sockets.delete(waAccountId);
-
-      if (stopping.has(waAccountId)) {
-        logger.info({ waAccountId, statusCode }, 'Ignoring close from intentionally stopped session');
-        return;
+      if (isCurrentSocket) {
+        sockets.delete(waAccountId);
+        clearQrExpiryTimer(waAccountId);
       }
 
+      if (stopping.has(waAccountId)) return;
       if (!isCurrentSocket) {
         logger.info({ waAccountId, statusCode }, 'Ignoring close from stale socket');
         return;
@@ -136,6 +182,8 @@ export async function startSession(waAccountId: string): Promise<void> {
         await updateAccount(waAccountId, {
           is_connected: false,
           qr_code: null,
+          qr_generated_at: null,
+          qr_expires_at: null,
           phone_number: null,
           status: loggedOut ? 'logged_out' : 'pending',
         });
@@ -159,6 +207,8 @@ export async function startSession(waAccountId: string): Promise<void> {
           is_connected: false,
           status: 'disconnected',
           qr_code: null,
+          qr_generated_at: null,
+          qr_expires_at: null,
         });
         logger.warn({ waAccountId, statusCode }, 'WhatsApp connection replaced elsewhere — not reconnecting automatically');
         return;
@@ -168,6 +218,8 @@ export async function startSession(waAccountId: string): Promise<void> {
         is_connected: false,
         status: 'disconnected',
         qr_code: null,
+        qr_generated_at: null,
+        qr_expires_at: null,
       });
       logger.warn({ waAccountId, statusCode }, `Connection closed, reconnecting in ${RECONNECT_DELAY_MS}ms`);
       setTimeout(() => {
@@ -198,6 +250,7 @@ export async function stopSession(waAccountId: string): Promise<void> {
   const sock = sockets.get(waAccountId);
   stopping.add(waAccountId);
   try {
+    clearQrExpiryTimer(waAccountId);
     if (sock) {
       await sock.logout().catch(() => undefined);
       if (sockets.get(waAccountId) === sock) sockets.delete(waAccountId);
@@ -207,6 +260,8 @@ export async function stopSession(waAccountId: string): Promise<void> {
       is_connected: false,
       status: 'logged_out',
       qr_code: null,
+      qr_generated_at: null,
+      qr_expires_at: null,
       phone_number: null,
     });
   } finally {
