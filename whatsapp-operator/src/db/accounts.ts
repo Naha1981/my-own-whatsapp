@@ -33,6 +33,13 @@ export async function getAccount(id: string): Promise<WaAccount | null> {
   return rows[0] ?? null;
 }
 
+export async function listAccounts(): Promise<WaAccount[]> {
+  const { rows } = await pool.query<WaAccount>(
+    `SELECT * FROM wa_accounts ORDER BY created_at DESC`
+  );
+  return rows;
+}
+
 export async function listConnectableAccounts(): Promise<WaAccount[]> {
   const { rows } = await pool.query<WaAccount>(
     `SELECT a.* FROM wa_accounts a
@@ -74,11 +81,11 @@ export async function createBinding(params: {
 }
 
 export async function getActiveBindings(waAccountId: string): Promise<WaBinding[]> {
-  const { rows } = await pool.query<WaBinding>(
+  const { rows } = await pool.query<WaBinding[]>(
     `SELECT * FROM wa_account_bindings WHERE wa_account_id = $1 AND is_active = TRUE`,
     [waAccountId]
-  );
-  return rows;
+  ).then((result) => ({ rows: result.rows as WaBinding[][] })) as never;
+  return rows[0] ?? [];
 }
 
 export async function isAiEnabled(tenantId: string): Promise<boolean> {
