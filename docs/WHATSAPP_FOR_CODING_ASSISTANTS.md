@@ -16,7 +16,7 @@ This is the temporary transport strategy while applications are being validated.
 │ NahaLabs app       │                            │ WhatsApp Operator        │
 │                    │  ◀── signed webhooks ───── │                          │
 │ dashboard / AI /   │                            │ one Baileys socket/account│
-│ CRM / orders       │                            │ QR pairing                │
+│ CRM / orders       │                            │ QR + pairing code         │
 └────────────────────┘                            │ reconnect / reset        │
                                                   │ send / receive           │
                                                   └───────────┬──────────────┘
@@ -76,6 +76,48 @@ NODE_ENV=production
 
 Production webhook URLs must be public HTTPS endpoints. Do not configure `localhost` or `127.0.0.1` in production.
 
+## Business-owner pairing flow
+
+The intended user journey now offers **two choices**. Both methods use the same Operator socket and both end in the same `connected` state.
+
+```text
+Business owner opens your app
+        ↓
+Clicks “Connect WhatsApp”
+        ↓
+App creates/loads a waAccountId
+        ↓
+App calls POST /accounts/:id/connect
+        ↓
+Dashboard offers:
+   [ Scan QR ] OR [ Use phone number ]
+        |
+        +---- QR path ------------------------------+
+        |                                             |
+        | Operator generates QR                      |
+        | App polls GET /accounts/:id/qr             |
+        | Owner scans from own WhatsApp phone        |
+        |                                             |
+        +---- Pairing-code path ---------------------+
+                  Owner enters WhatsApp number
+                  App calls POST /accounts/:id/pairing-code
+                  Operator returns short-lived code
+                  Owner opens WhatsApp → Linked Devices
+                  → Link a device → Link with phone number instead
+                  → enters the code
+                         |
+                         v
+                Operator receives pairing
+                         |
+                         v
+              GET /accounts/:id/status
+                         |
+                         v
+                     connected
+```
+
+The owner must complete the authorization from the **WhatsApp account they want to connect**. Typing a phone number into the website by itself does not authenticate the WhatsApp account.
+
 ## Tenant and account model
 
 The Operator has a `waAccountId` for each connected WhatsApp identity.
@@ -89,40 +131,6 @@ Each application maps that account to its own:
 The application is responsible for authorizing which authenticated user/admin is allowed to operate which tenant and `waAccountId`.
 
 **Never trust a client-supplied tenant ID as authorization.** Resolve ownership from the application's authenticated user/session and database records first.
-
-## Business-owner pairing flow
-
-The intended user journey is:
-
-```text
-Business owner opens your app
-        ↓
-Clicks “Connect WhatsApp”
-        ↓
-App creates/loads a waAccountId
-        ↓
-App calls POST /accounts/:id/connect
-        ↓
-Operator generates a fresh QR
-        ↓
-App polls GET /accounts/:id/qr every ~3 seconds
-        ↓
-App renders the QR without modification
-        ↓
-Business owner opens their OWN WhatsApp on their phone
-        ↓
-WhatsApp → Linked Devices → Link a device
-        ↓
-Owner scans the displayed QR
-        ↓
-Operator receives the pairing event
-        ↓
-GET /accounts/:id/status becomes connected
-        ↓
-Dashboard shows the owner's connected business number
-```
-
-The owner scans using the WhatsApp account they want to use for the business. The Operator does not need the owner's WhatsApp credentials or password.
 
 ## QR-code rules
 
@@ -154,15 +162,72 @@ The consuming application should:
 - show a “QR expired / refresh” state instead of asking the owner to scan an old image;
 - provide a reset/retry action for a failed pairing.
 
-### Important diagnostic distinction
+## Phone-number pairing-code rules
 
-A QR can be perfectly valid and still fail to link. The meaningful diagnostic signal is the pairing-success event, not merely QR generation.
+The Operator also supports WhatsApp Web phone-number pairing through `requestPairingCode(phoneNumber)`. The phone number must be supplied with its international country code; the Operator normalizes common formatting characters and validates an 8–15 digit result. citeturn203790search3turn203790search11
+
+Use:
+
+```http
+POST /accounts/:id/pairing-code
+X-API-Key: <OPERATOR_API_KEY>
+Content-Type: application/json
+```
+
+```json
+{
+  "phoneNumber": "+27 82 123 4567"
+}
+```
+
+Response includes:
+
+```json
+{
+  "status": "pairing_code_ready",
+  "pairingCode": "ABCD1234",
+  "pairingCodeDisplay": "ABCD-1234",
+  "expiresAt": "2026-09-12T07:01:00.000Z"
+}
+```
+
+The dashboard should display the code and tell the owner to use their own WhatsApp application:
+
+```text
+WhatsApp → Linked Devices → Link a device
+→ Link with phone number instead → enter the code
+```
+
+Implementation rules:
+
+- never ask for a WhatsApp password;
+- never treat the phone number alone as authentication;
+- never store the temporary pairing code in browser localStorage;
+- show its expiry time;
+- allow only one active pairing code per account;
+- after the code is entered on the phone, poll `/accounts/:id/status` until connected;
+- treat `pairing_code_ready` as pending, not proof of success;
+- use reset to start over when the owner wants to pair a different number or the session is broken.
+
+The Operator also exposes:
+
+```http
+GET /accounts/:id/pairing-code
+```
+
+for recovering the currently active short-lived code. Responses are non-cacheable.
+
+## Important diagnostic distinction
+
+A QR or pairing code can be generated successfully while WhatsApp still refuses the device link. The meaningful diagnostic signal is the successful pairing/connection path, not merely receiving a code.
 
 For troubleshooting, inspect the Operator logs for:
 
 ```text
 WhatsApp QR generated
+WhatsApp pairing code generated
 WhatsApp pairing success received
+WhatsApp connected
 WhatsApp connection closed
 ```
 
@@ -185,47 +250,14 @@ Content-Type: application/json
 }
 ```
 
-Response:
-
-```json
-{
-  "waAccountId": "uuid",
-  "status": "pending"
-}
-```
-
-### Start pairing
+### Start the WhatsApp session
 
 ```http
 POST /accounts/:id/connect
 X-API-Key: <OPERATOR_API_KEY>
 ```
 
-Then poll:
-
-```http
-GET /accounts/:id/qr
-X-API-Key: <OPERATOR_API_KEY>
-Cache-Control: no-cache
-```
-
-Typical response:
-
-```json
-{
-  "status": "qr_ready",
-  "isConnected": false,
-  "qrCode": "data:image/png;base64,...",
-  "qrGeneratedAt": "2026-09-12T00:00:00.000Z",
-  "qrExpiresAt": "2026-09-12T00:00:20.000Z"
-}
-```
-
-Where supported, a direct non-cacheable QR image endpoint may also be used:
-
-```http
-GET /accounts/:id/qr.png
-```
+Then choose either the QR flow or the pairing-code flow above.
 
 ### Check connection status
 
@@ -310,21 +342,6 @@ The signature is HMAC-SHA256 using `WEBHOOK_SECRET` over the exact JSON payload.
 
 The receiving application must verify the signature **before** processing the message.
 
-Example:
-
-```ts
-import crypto from 'node:crypto';
-
-function verifyWebhook(secret: string, rawBody: string, signature: string): boolean {
-  const expected = crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
-  const a = Buffer.from(expected, 'hex');
-  const b = Buffer.from(signature, 'hex');
-  return a.length === b.length && crypto.timingSafeEqual(a, b);
-}
-```
-
-Prefer the framework's raw request-body support when implementing signature verification. Do not verify a signature against a differently serialized/reformatted JSON object if the webhook contract is based on the original body bytes.
-
 ## Inbound message processing
 
 The application's webhook handler should:
@@ -337,8 +354,6 @@ The application's webhook handler should:
 6. Persist the business result independently of the WhatsApp transport.
 7. Reply through the transport abstraction rather than calling Baileys directly.
 
-Do not put tenant authorization decisions inside raw webhook JSON claims alone.
-
 ## Transport abstraction
 
 Applications should hide the provider behind a small interface:
@@ -346,6 +361,7 @@ Applications should hide the provider behind a small interface:
 ```ts
 export interface WhatsAppTransport {
   connect(accountId: string): Promise<void>;
+  requestPairingCode(accountId: string, phoneNumber: string): Promise<unknown>;
   getStatus(accountId: string): Promise<unknown>;
   reset(accountId: string): Promise<void>;
   send(accountId: string, to: string, text: string): Promise<void>;
@@ -363,12 +379,10 @@ Coding assistants must not “fix” every disconnect by deleting credentials.
 The Operator follows this model:
 
 - ordinary transient disconnect → reconnect and keep credentials;
-- `loggedOut` → clear credentials and require a new scan;
+- `loggedOut` → clear credentials and require a new pairing;
 - bad-session / status 500 → clear credentials and start a clean session;
 - connection replaced elsewhere → do not create a reconnect loop;
 - stale socket close → must never delete a newer live socket.
-
-This distinction is critical for a reusable platform.
 
 ## Version and browser rules
 
@@ -397,10 +411,12 @@ For the current architecture:
 - [ ] Operator URL and shared secrets are configured.
 - [ ] Tenant authorization prevents cross-tenant `waAccountId` access.
 - [ ] Connect flow creates or selects exactly one account identity.
+- [ ] User is offered both QR and phone-number pairing code when both are supported by the UI.
 - [ ] QR polling is faster than QR refresh/expiry.
 - [ ] QR is rendered without cropping or visual transformations.
 - [ ] Expired QR is replaced instead of reused.
-- [ ] Connected state removes the QR UI.
+- [ ] Pairing codes are not persisted in browser storage.
+- [ ] Connected state removes pairing UI.
 - [ ] Webhook signature verification is tested.
 - [ ] Duplicate inbound messages do not double-trigger business actions.
 - [ ] Send failures are surfaced to the application.
@@ -415,7 +431,9 @@ Test at least:
 - Missing webhook secret.
 - Invalid webhook signature.
 - Expired QR.
+- Expired pairing code.
 - QR scanned but pairing not completed.
+- Pairing code entered but pairing not completed.
 - WhatsApp session replaced on another device.
 - transient socket disconnect.
 - logged-out session.
@@ -425,21 +443,20 @@ Test at least:
 - duplicate message delivery.
 - unauthorized tenant attempting to use another tenant's account.
 
-## Troubleshooting QR pairing
+## Troubleshooting pairing
 
 Follow this order and do not skip directly to code changes:
 
 1. Confirm the deployed Operator commit is the expected commit.
 2. Confirm the Operator is actually running.
-3. Confirm the QR is changing and is not being cached.
-4. Confirm the QR decodes programmatically as a valid Baileys pairing string.
-5. Scan using the owner's real WhatsApp phone via Linked Devices.
-6. Search Operator logs for `WhatsApp pairing success received`.
-7. If pairing-success exists, debug persistence/status/dashboard reporting.
-8. If pairing-success never appears across full QR cycles, inspect the close status and account/number trust before changing QR rendering code.
-9. Try a different clean WhatsApp number if the evidence points to WhatsApp refusing the link.
-
-The QR itself should not be blamed merely because the phone did not connect.
+3. For QR: confirm the QR is changing and is not being cached.
+4. For QR: confirm the QR decodes programmatically as a valid Baileys pairing string.
+5. Use the owner's real WhatsApp phone via Linked Devices.
+6. For phone pairing: verify the entered number includes the country code and is the same WhatsApp account the owner is authorizing.
+7. Search Operator logs for `WhatsApp pairing success received` and `WhatsApp connected`.
+8. If pairing-success exists, debug persistence/status/dashboard reporting.
+9. If pairing-success never appears across full QR/code attempts, inspect the close status and account/number trust before changing QR rendering code.
+10. Try a different clean WhatsApp number if the evidence points to WhatsApp refusing the link.
 
 ## What not to put in an application
 
@@ -451,6 +468,7 @@ Do not add:
 - Baileys session files on local disk;
 - client-side copies of `OPERATOR_API_KEY` unless there is an explicit secure server-side proxy design;
 - webhook secrets in browser code;
+- pairing codes in long-lived browser storage;
 - long-lived QR values in localStorage;
 - guessed WhatsApp protocol versions;
 - provider-specific code in core business/domain modules.
@@ -483,4 +501,4 @@ Do not build customer/order/CRM/AI logic around Baileys-specific message types i
 
 ## Final rule for coding assistants
 
-Before changing WhatsApp code, inspect the current Operator implementation and this document. Reuse existing endpoints and abstractions. Make the smallest safe change. Test failure paths. Report exact evidence from typecheck/build/CI and deployment state. Never claim that a WhatsApp number is successfully linked until a real phone scan has been observed and the Operator has recorded the successful pairing/connection path.
+Before changing WhatsApp code, inspect the current Operator implementation and this document. Reuse existing endpoints and abstractions. Make the smallest safe change. Test failure paths. Report exact evidence from typecheck/build/CI and deployment state. Never claim that a WhatsApp number is successfully linked until a real phone authorization has been observed and the Operator has recorded the successful pairing/connection path.
