@@ -6,6 +6,7 @@ import { requireApiKey } from './middleware/auth.js';
 import { accountsRouter } from './routes/accounts.js';
 import { sendRouter } from './routes/send.js';
 import { mediaRouter } from './routes/media.js';
+import { callsRouter } from './routes/calls.js';
 import { healthRouter } from './routes/health.js';
 import { restoreConnectableSessions } from './whatsapp/session-manager.js';
 
@@ -22,6 +23,7 @@ app.use('/health', healthRouter);
 app.use('/accounts', requireApiKey, accountsRouter);
 app.use('/send', requireApiKey, sendRouter);
 app.use('/media', requireApiKey, mediaRouter);
+app.use('/calls', requireApiKey, callsRouter);
 
 app.use((req, res) => {
   res.status(404).json({ error: 'NOT_FOUND', path: req.path });
