@@ -12,7 +12,7 @@ Business owner's own WhatsApp phone
         v
 Application dashboard
         |
-        | HTTPS + X-API-Key
+        | HTTPS + X-API-Key + app/tenant scope
         v
 NahaLabs WhatsApp Operator
         |
@@ -22,6 +22,7 @@ NahaLabs WhatsApp Operator
         +-- Postgres-backed credentials and Signal keys
         +-- signed inbound webhooks
         +-- outbound send API
+        +-- message lifecycle / presence API
         |
         v
      Postgres
@@ -53,6 +54,21 @@ Every application consuming the Operator needs:
 - `APP_URL`
 
 Production webhook URLs must be public HTTPS endpoints. `localhost` and `127.0.0.1` are rejected.
+
+## Security scope headers
+
+The shared Operator API key authenticates the caller, but account-level actions also require the
+account's exact application scope. Send these headers on every account-specific request:
+
+```text
+X-API-Key: <operator key>
+X-App-Id: <app id>
+X-Tenant-Id: <tenant id>
+```
+
+For JSON requests, `appId` and `tenantId` may also be supplied in the body. The Operator checks that
+both values match an active binding for the target `waAccountId`. A mismatched or missing scope is
+rejected before the account operation runs.
 
 ## Reliable business-owner pairing flow
 
@@ -176,9 +192,6 @@ Phone pairing rules:
 - a fresh pairing code is created only for the active unregistered socket/session;
 - only one active pairing code is retained per account.
 
-Baileys exposes `requestPairingCode(phoneNumber)` for Web-device pairing. The underlying pairing still
-requires action from the owner's existing WhatsApp account. citeturn203790search3turn203790search11
-
 ### 4. Confirm connection
 
 `GET /accounts/:id/status`
@@ -194,18 +207,6 @@ requires action from the owner's existing WhatsApp account. citeturn203790
 
 When the status becomes `connected`, hide both pairing choices and show the business's connected
 WhatsApp number. The Operator also logs the low-level `CB:iq,,pair-success` diagnostic when available.
-
-## QR reliability rules
-
-The PDF's playbook is explicit that the QR should be programmatically decodable before blaming QR
-rendering. This implementation therefore uses a real QR encoder, a 512px PNG, high error correction,
-and a preserved quiet zone rather than a terminal-only or text representation. fileciteturn0file0L128-L135
-
-The dashboard should poll substantially faster than the QR refresh cadence. The reference recommends
-roughly 2–3 seconds; this API advertises 3000ms. fileciteturn0file0L185-L188
-
-If the QR expires, the API returns `status: "qr_expired"` and `qrCode: null`. Keep polling for the next
-fresh QR. Do not retry by reconnecting the same account repeatedly from the frontend.
 
 ## 5. Receive inbound messages
 
@@ -230,7 +231,7 @@ X-Webhook-Signature: <sha256 hex>
 The signature is HMAC-SHA256 of the exact JSON payload using `WEBHOOK_SECRET`.
 Verify it before processing the message.
 
-### 6. Send outbound messages
+## 6. Send outbound messages
 
 `POST /send`
 
@@ -242,7 +243,97 @@ Verify it before processing the message.
 }
 ```
 
-### 7. Reset a broken or intentionally replaced session
+The send route also accepts the existing rich media types (`image`, `video`, `audio`, `document`,
+`sticker`, `location`, `contact`, `poll`, and `reaction`). A `quotedMessage` object can be supplied
+to make the outgoing message a reply/quote against the referenced WhatsApp message.
+
+## 7. Message lifecycle and chat state
+
+These routes keep common messaging operations behind the Operator instead of making each Brain app
+know Baileys details.
+
+### Mark one or more messages as read
+
+`POST /messages/read`
+
+Single message:
+
+```json
+{
+  "waAccountId": "uuid",
+  "messageId": "ABC123",
+  "messageRemoteJid": "27821234567@s.whatsapp.net",
+  "messageFromMe": false
+}
+```
+
+Batch form:
+
+```json
+{
+  "waAccountId": "uuid",
+  "messages": [
+    {
+      "messageId": "ABC123",
+      "messageRemoteJid": "27821234567@s.whatsapp.net",
+      "messageFromMe": false
+    },
+    {
+      "messageId": "DEF456",
+      "messageRemoteJid": "27821234567@s.whatsapp.net",
+      "messageFromMe": false
+    }
+  ]
+}
+```
+
+### Presence / typing state
+
+`POST /messages/presence`
+
+```json
+{
+  "waAccountId": "uuid",
+  "to": "27821234567",
+  "presence": "composing"
+}
+```
+
+Allowed values are `available`, `unavailable`, `composing`, `recording`, and `paused`.
+
+### Edit a message
+
+`POST /messages/edit`
+
+```json
+{
+  "waAccountId": "uuid",
+  "to": "27821234567",
+  "messageId": "ABC123",
+  "messageRemoteJid": "27821234567@s.whatsapp.net",
+  "messageFromMe": true,
+  "text": "Updated wording"
+}
+```
+
+### Delete a message for everyone
+
+`POST /messages/delete`
+
+```json
+{
+  "waAccountId": "uuid",
+  "to": "27821234567",
+  "messageId": "ABC123",
+  "messageRemoteJid": "27821234567@s.whatsapp.net",
+  "messageFromMe": true
+}
+```
+
+Baileys exposes explicit read-message and presence methods, and its message-send contract supports
+message editing and deletion. citeturn305747search5turn305747search7turn305747search9
+
+## 8. Reset a broken or intentionally replaced session
 
 `POST /accounts/:id/reset`
 
@@ -254,32 +345,40 @@ bad-session condition. Do not delete credentials for ordinary network reconnects
 
 ## Connection lifecycle
 
-The Operator follows the PDF recovery model:
+The Operator follows the recovery model already documented in this project:
 
-- live WhatsApp Web revision is preferred when resolving the client version
-- Baileys' version helper is the fallback
-- QR generation is explicit, high-error-correction, and short-lived
-- phone pairing codes are short-lived and held in memory only
-- socket closes are logged before stale-socket checks
-- stale sockets cannot delete a newer socket
-- ordinary disconnects reconnect without deleting credentials
-- `loggedOut` and bad-session/500 conditions purge credentials
-- `connectionReplaced` does not trigger an automatic reconnect
-- successful pairing is observable through the `pair-success` diagnostic event
+- live WhatsApp Web revision is preferred when resolving the client version;
+- Baileys' version helper is the fallback;
+- QR generation is explicit, high-error-correction, and short-lived;
+- phone pairing codes are short-lived and held in memory only;
+- socket closes are logged before stale-socket checks;
+- stale sockets cannot delete a newer socket;
+- ordinary disconnects reconnect without deleting credentials;
+- `loggedOut` and bad-session/500 conditions purge credentials;
+- `connectionReplaced` does not trigger an automatic reconnect;
+- successful pairing is observable through the `pair-success` diagnostic event.
 
 A QR or pairing code can be presented successfully while WhatsApp still refuses the device link.
-The `connected` status and pairing-success signal are therefore more useful than merely seeing a QR
-or receiving a code. fileciteturn0file0L110-L119
+The `connected` status is therefore the important application-level success state.
 
 ## Webhook reliability
 
 Failed webhook deliveries are retried three times with linear backoff. After the final failure,
 the payload is persisted in the dead-letter table for later recovery.
 
+## Runtime shutdown
+
+The Operator now handles `SIGTERM` and `SIGINT` by closing the HTTP listener, stopping active WhatsApp
+sessions, and closing the Postgres pool before exiting. This prevents a deployment restart from leaving
+socket/session cleanup entirely to process termination.
+
 ## Security boundary
 
 All account and send routes require `X-API-Key` or `Authorization: Bearer` using the shared
 `OPERATOR_API_KEY`. The comparison is constant-time.
+
+Account-specific control, message, media, and call operations additionally require an active
+`appId` + `tenantId` binding for the target account.
 
 The Operator signs outbound webhooks with `WEBHOOK_SECRET`. The consuming application must verify
 the signature before trusting the message.
@@ -299,6 +398,10 @@ interface WhatsAppTransport {
   getStatus(accountId: string): Promise<unknown>;
   reset(accountId: string): Promise<void>;
   send(accountId: string, to: string, text: string): Promise<void>;
+  readMessages(accountId: string, messageKeys: unknown[]): Promise<void>;
+  setPresence(accountId: string, to: string | undefined, presence: string): Promise<void>;
+  edit(accountId: string, message: unknown, text: string): Promise<void>;
+  delete(accountId: string, message: unknown): Promise<void>;
 }
 ```
 
