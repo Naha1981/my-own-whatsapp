@@ -12,15 +12,11 @@ controls. Do not use it for spam, bulk unsolicited messaging, or other prohibite
 ## Architecture
 
 ```text
-Business owner phone
-        │
-        │ WhatsApp → Linked Devices → Link a device → Scan QR
-        ▼
-Brain app dashboard ──HTTP + OPERATOR_API_KEY──▶ WhatsApp Operator ──Baileys──▶ WhatsApp
-       ▲                                             │
-       └──────────── signed inbound webhook ◀────────┤
-                                                     │
-                                             shared PostgreSQL
+Brain app(s) ──HTTP + OPERATOR_API_KEY──▶ WhatsApp Operator ──Baileys──▶ WhatsApp
+       ▲                                      │
+       └──── signed webhook ◀─────────────────┤
+                                              │
+                                      shared PostgreSQL
 ```
 
 The Operator owns one live socket per `waAccountId`. PostgreSQL stores credentials and Signal keys so
@@ -29,7 +25,7 @@ add cross-instance socket ownership/locking.
 
 ## Business-owner QR pairing
 
-The intended flow is simple:
+The intended flow is:
 
 1. Your application creates a WhatsApp account with `POST /accounts` and receives `waAccountId`.
 2. Your application calls `POST /accounts/:id/connect`.
@@ -49,6 +45,40 @@ old one-time QR.
 
 QRs are deliberately short-lived. The API returns `qrGeneratedAt` and `qrExpiresAt`; after expiry the
 Operator reports `qr_expired` and returns `qrCode: null`. Keep polling so the next fresh QR is displayed.
+
+## Render Free-tier keepalive
+
+Render Free web services spin down after 15 minutes without inbound traffic. An HTTP request wakes the
+service again. The repository includes a legitimate health-request keepalive for the Operator because
+Baileys needs a long-lived process.
+
+Files:
+
+```text
+scripts/render-keepalive.sh
+.github/workflows/render-keepalive.yml
+```
+
+Configure the GitHub repository secret:
+
+```text
+RENDER_OPERATOR_URL=https://your-whatsapp-operator.onrender.com
+```
+
+The scheduled workflow sends `GET /health` every 10 minutes. You can trigger it manually from GitHub Actions.
+For an external scheduler, run:
+
+```bash
+export RENDER_OPERATOR_URL=https://your-whatsapp-operator.onrender.com
+bash scripts/render-keepalive.sh
+```
+
+A 5-minute external interval gives additional timing headroom. The keepalive prevents only the idle
+15-minute spin-down condition; Render may still restart a Free instance, and Free compute is limited to
+750 instance hours per workspace per calendar month. Keeping the Operator continuously warm consumes
+those hours.
+
+For business-critical uptime, use a paid persistent service or an independent external scheduler/monitor.
 
 ## Environment
 
@@ -85,7 +115,7 @@ psql "$DATABASE_URL" -f db/schema.sql
 
 The schema contains:
 
-- `wa_accounts` — connected WhatsApp identities plus QR snapshot and QR expiry metadata.
+- `wa_accounts` — connected WhatsApp identities and current QR/status snapshot.
 - `wa_sessions` and `wa_signal_keys` — persisted Baileys authentication and Signal state.
 - `wa_account_bindings` — app/tenant ownership plus inbound webhook destinations.
 - `wa_controls` and `wa_blocklist` — application-level safety switches/opt-outs.
@@ -217,11 +247,10 @@ When troubleshooting QR pairing, inspect logs in this order:
 
 1. Is the deployed commit the code you expect?
 2. Is a current QR being generated and refreshed?
-3. Does the QR endpoint report fresh `qrGeneratedAt` / `qrExpiresAt` values?
-4. Does the log contain `WhatsApp pairing success received` after the real phone scan?
-5. What `statusCode` and error message were logged on close?
-6. Are `DATABASE_URL`, `WEBHOOK_SECRET`, and `OPERATOR_API_KEY` identical wherever the two services share them?
-7. Only then investigate account/number trust or WhatsApp-side refusal.
+3. Does the log contain `WhatsApp pairing success received` after the real phone scan?
+4. What `statusCode` and error message were logged on close?
+5. Are `DATABASE_URL`, `WEBHOOK_SECRET`, and `OPERATOR_API_KEY` identical wherever the two services share them?
+6. Only then investigate account/number trust or WhatsApp-side refusal.
 
 A QR timing out with no pairing-success signal is not itself a QR-generation bug; the underlying failure
 may be on WhatsApp's side.
