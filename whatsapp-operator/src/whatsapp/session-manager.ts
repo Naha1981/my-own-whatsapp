@@ -20,6 +20,8 @@ const sockets = new Map<string, WASocket>();
 const stopping = new Set<string>();
 const qrExpiryTimers = new Map<string, NodeJS.Timeout>();
 const qrReadyAccounts = new Set<string>();
+const pairingModeRequested = new Set<string>();
+const pairingCodeRequests = new Map<string, Promise<PairingCodeState>>();
 
 interface PairingCodeState {
   code: string;
@@ -131,8 +133,7 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export async function requestPairingCode(waAccountId: string, phoneNumber: string): Promise<PairingCodeState> {
-  const normalizedPhoneNumber = normalizePairingPhoneNumber(phoneNumber);
+async function requestPairingCodeOnce(waAccountId: string, normalizedPhoneNumber: string): Promise<PairingCodeState> {
   const existing = getPairingCode(waAccountId);
   if (existing) {
     if (existing.phoneNumber !== normalizedPhoneNumber) {
@@ -141,54 +142,73 @@ export async function requestPairingCode(waAccountId: string, phoneNumber: strin
     return existing;
   }
 
-  if (!sockets.has(waAccountId)) {
-    await startSession(waAccountId);
-  }
-
-  const deadline = Date.now() + PAIRING_READY_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    if (sockets.has(waAccountId) && qrReadyAccounts.has(waAccountId)) break;
-    await sleep(250);
-  }
-
-  const sock = sockets.get(waAccountId);
-  if (!sock) throw new Error('WhatsApp session is not available; try connecting again');
-  if (!qrReadyAccounts.has(waAccountId)) {
-    throw new Error('WhatsApp session did not become ready for phone-number pairing in time');
-  }
-
-  const code = await sock.requestPairingCode(normalizedPhoneNumber);
-  const state: PairingCodeState = {
-    code,
-    phoneNumber: normalizedPhoneNumber,
-    expiresAt: Date.now() + PAIRING_CODE_LIFETIME_MS,
-  };
-  pairingCodes.set(waAccountId, state);
-
-  clearQrExpiryTimer(waAccountId);
-  await updateAccount(waAccountId, {
-    qr_code: null,
-    qr_generated_at: null,
-    qr_expires_at: null,
-    is_connected: false,
-    status: 'pairing_code_ready',
-  });
-
-  logger.info({ waAccountId, phoneNumber: normalizedPhoneNumber, expiresAt: new Date(state.expiresAt).toISOString() }, 'WhatsApp pairing code generated');
-
-  setTimeout(() => {
-    const current = pairingCodes.get(waAccountId);
-    if (current?.code === code && current.expiresAt <= Date.now()) {
-      pairingCodes.delete(waAccountId);
-      if (sockets.get(waAccountId) === sock) {
-        updateAccount(waAccountId, { status: 'pairing_code_expired' }).catch((err) =>
-          logger.error({ err, waAccountId }, 'Failed to mark expired pairing code')
-        );
-      }
+  pairingModeRequested.add(waAccountId);
+  try {
+    if (!sockets.has(waAccountId)) {
+      await startSession(waAccountId);
     }
-  }, PAIRING_CODE_LIFETIME_MS + 100);
 
-  return state;
+    const deadline = Date.now() + PAIRING_READY_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      if (sockets.has(waAccountId) && qrReadyAccounts.has(waAccountId)) break;
+      await sleep(250);
+    }
+
+    const sock = sockets.get(waAccountId);
+    if (!sock) throw new Error('WhatsApp session is not available; try connecting again');
+    if (!qrReadyAccounts.has(waAccountId)) {
+      throw new Error('WhatsApp session did not become ready for phone-number pairing in time');
+    }
+
+    const code = await sock.requestPairingCode(normalizedPhoneNumber);
+    const state: PairingCodeState = {
+      code,
+      phoneNumber: normalizedPhoneNumber,
+      expiresAt: Date.now() + PAIRING_CODE_LIFETIME_MS,
+    };
+    pairingCodes.set(waAccountId, state);
+
+    clearQrExpiryTimer(waAccountId);
+    await updateAccount(waAccountId, {
+      qr_code: null,
+      qr_generated_at: null,
+      qr_expires_at: null,
+      is_connected: false,
+      status: 'pairing_code_ready',
+    });
+
+    logger.info({ waAccountId, phoneNumber: normalizedPhoneNumber, expiresAt: new Date(state.expiresAt).toISOString() }, 'WhatsApp pairing code generated');
+
+    setTimeout(() => {
+      const current = pairingCodes.get(waAccountId);
+      if (current?.code === code && current.expiresAt <= Date.now()) {
+        pairingCodes.delete(waAccountId);
+        if (sockets.get(waAccountId) === sock) {
+          updateAccount(waAccountId, { status: 'pairing_code_expired' }).catch((err) =>
+            logger.error({ err, waAccountId }, 'Failed to mark expired pairing code')
+          );
+        }
+      }
+    }, PAIRING_CODE_LIFETIME_MS + 100);
+
+    return state;
+  } finally {
+    pairingModeRequested.delete(waAccountId);
+  }
+}
+
+export async function requestPairingCode(waAccountId: string, phoneNumber: string): Promise<PairingCodeState> {
+  const normalizedPhoneNumber = normalizePairingPhoneNumber(phoneNumber);
+  const existingRequest = pairingCodeRequests.get(waAccountId);
+  if (existingRequest) return existingRequest;
+
+  const request = requestPairingCodeOnce(waAccountId, normalizedPhoneNumber);
+  pairingCodeRequests.set(waAccountId, request);
+  try {
+    return await request;
+  } finally {
+    if (pairingCodeRequests.get(waAccountId) === request) pairingCodeRequests.delete(waAccountId);
+  }
 }
 
 export async function startSession(waAccountId: string): Promise<void> {
@@ -222,23 +242,28 @@ export async function startSession(waAccountId: string): Promise<void> {
     if (qr) {
       qrReadyAccounts.add(waAccountId);
       clearPairingCode(waAccountId);
-      try {
-        const qrDataUrl = await buildQrDataUrl(qr);
-        const generatedAt = new Date();
-        const expiresAt = new Date(generatedAt.getTime() + QR_LIFETIME_MS);
 
-        await updateAccount(waAccountId, {
-          qr_code: qrDataUrl,
-          qr_generated_at: generatedAt.toISOString(),
-          qr_expires_at: expiresAt.toISOString(),
-          is_connected: false,
-          status: 'qr_ready',
-        });
+      if (!pairingModeRequested.has(waAccountId)) {
+        try {
+          const qrDataUrl = await buildQrDataUrl(qr);
+          const generatedAt = new Date();
+          const expiresAt = new Date(generatedAt.getTime() + QR_LIFETIME_MS);
 
-        scheduleQrExpiry(waAccountId, sock);
-        logger.info({ waAccountId, qrSizePx: QR_SIZE_PX, expiresAt: expiresAt.toISOString() }, 'WhatsApp QR generated');
-      } catch (err) {
-        logger.error({ err, waAccountId }, 'Failed to encode WhatsApp QR');
+          if (!pairingModeRequested.has(waAccountId)) {
+            await updateAccount(waAccountId, {
+              qr_code: qrDataUrl,
+              qr_generated_at: generatedAt.toISOString(),
+              qr_expires_at: expiresAt.toISOString(),
+              is_connected: false,
+              status: 'qr_ready',
+            });
+            scheduleQrExpiry(waAccountId, sock);
+          }
+
+          logger.info({ waAccountId, qrSizePx: QR_SIZE_PX, expiresAt: expiresAt.toISOString() }, 'WhatsApp QR generated');
+        } catch (err) {
+          logger.error({ err, waAccountId }, 'Failed to encode WhatsApp QR');
+        }
       }
     }
 
@@ -271,6 +296,7 @@ export async function startSession(waAccountId: string): Promise<void> {
         clearQrExpiryTimer(waAccountId);
         qrReadyAccounts.delete(waAccountId);
         clearPairingCode(waAccountId);
+        pairingModeRequested.delete(waAccountId);
       }
 
       if (stopping.has(waAccountId)) return;
@@ -294,7 +320,7 @@ export async function startSession(waAccountId: string): Promise<void> {
         });
 
         if (loggedOut) {
-          logger.warn({ waAccountId, statusCode }, 'WhatsApp logged out — credentials purged; fresh scan required');
+          logger.warn({ waAccountId, statusCode }, 'WhatsApp logged out — credentials purged; fresh pairing required');
           return;
         }
 
@@ -357,6 +383,7 @@ export async function stopSession(waAccountId: string): Promise<void> {
   try {
     clearQrExpiryTimer(waAccountId);
     qrReadyAccounts.delete(waAccountId);
+    pairingModeRequested.delete(waAccountId);
     clearPairingCode(waAccountId);
     if (sock) {
       await sock.logout().catch(() => undefined);
