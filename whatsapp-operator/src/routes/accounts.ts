@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { createAccount, getAccount, listAccounts, createBinding } from '../db/accounts.js';
+import { createAccount, getAccount, listAccounts, createBinding, getActiveBindings } from '../db/accounts.js';
 import { asyncHandler } from '../middleware/async-handler.js';
 import { requireAccountAccess } from '../middleware/account-access.js';
 import { getPairingCode, requestPairingCode, resetSession, startSession, stopSession } from '../whatsapp/session-manager.js';
@@ -34,6 +34,64 @@ accountsRouter.get('/', asyncHandler(async (_req, res) => {
       status: account.status,
       isConnected: account.is_connected,
     })),
+  });
+}));
+
+/**
+ * Beginner-friendly first-time setup endpoint.
+ * Reuses an existing account already bound to the requested app/tenant, otherwise creates one,
+ * then starts the WhatsApp session so the next step is simply pairing the real phone.
+ */
+accountsRouter.post('/bootstrap', asyncHandler(async (req, res) => {
+  const body = req.body ?? {};
+  const label = String(body.label ?? '').trim() || 'NahaLabs WhatsApp';
+  const appId = String(body.appId ?? '').trim() || 'nahalabs';
+  const tenantId = String(body.tenantId ?? '').trim() || 'default';
+  const webhookUrlRaw = String(body.webhookUrl ?? '').trim();
+  const webhookUrl = webhookUrlRaw || null;
+
+  if (webhookUrl && !validateProductionWebhookUrl(webhookUrl)) {
+    res.status(400).json({
+      error: 'VALIDATION_ERROR',
+      message: 'Production webhookUrl must be a valid public HTTPS URL',
+    });
+    return;
+  }
+
+  const accounts = await listAccounts();
+  let account = null;
+
+  for (const candidate of accounts) {
+    const bindings = await getActiveBindings(candidate.id);
+    if (bindings.some((binding) => binding.app_id === appId && binding.tenant_id === tenantId)) {
+      account = candidate;
+      break;
+    }
+  }
+
+  let created = false;
+  if (!account) {
+    account = await createAccount(label);
+    created = true;
+  }
+
+  await createBinding({ waAccountId: account.id, appId, tenantId, webhookUrl });
+
+  if (!account.is_connected && account.status !== 'connecting' && account.status !== 'qr_ready') {
+    await startSession(account.id);
+  }
+
+  setNoStore(res);
+  res.status(created ? 201 : 200).json({
+    waAccountId: account.id,
+    status: account.is_connected ? 'connected' : 'connecting',
+    appId,
+    tenantId,
+    created,
+    webhookConfigured: Boolean(webhookUrl),
+    message: account.is_connected
+      ? 'Your NahaLabs WhatsApp account is already connected.'
+      : 'Setup is ready. Pair the business WhatsApp phone using the QR code or phone-number code.',
   });
 }));
 
