@@ -82,7 +82,7 @@ async function fetchLiveWhatsAppWebVersion(): Promise<WAVersion | undefined> {
     if (!response.ok) throw new Error(`WhatsApp Web sw.js returned HTTP ${response.status}`);
 
     const body = await response.text();
-    const match = body.match(/\\?"client_revision\\?":\s*(\d+)/);
+    const match = body.match(/\\?\"client_revision\\?\":\s*(\d+)/);
     if (!match?.[1]) throw new Error('client_revision not found in WhatsApp Web sw.js');
 
     const version: WAVersion = [2, 3000, Number(match[1])];
@@ -225,6 +225,7 @@ export async function startSession(waAccountId: string): Promise<void> {
     auth: state,
     ...(version ? { version } : {}),
     printQRInTerminal: false,
+    browser: ['Ubuntu', 'Chrome', '120.0.0.0'],
     qrTimeout: QR_LIFETIME_MS,
     syncFullHistory: false,
     markOnlineOnConnect: true,
