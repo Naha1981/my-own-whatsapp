@@ -5,6 +5,7 @@ import { config } from './config.js';
 import { requireApiKey } from './middleware/auth.js';
 import { accountsRouter } from './routes/accounts.js';
 import { sendRouter } from './routes/send.js';
+import { mediaRouter } from './routes/media.js';
 import { healthRouter } from './routes/health.js';
 import { restoreConnectableSessions } from './whatsapp/session-manager.js';
 
@@ -20,6 +21,7 @@ app.use('/health', healthRouter);
 // Everything below requires the shared Operator API key.
 app.use('/accounts', requireApiKey, accountsRouter);
 app.use('/send', requireApiKey, sendRouter);
+app.use('/media', requireApiKey, mediaRouter);
 
 app.use((req, res) => {
   res.status(404).json({ error: 'NOT_FOUND', path: req.path });
