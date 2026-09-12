@@ -2,11 +2,12 @@ import { Router } from 'express';
 import { downloadMediaMessage, getContentType, type WAMessage } from '@whiskeysockets/baileys';
 import pino from 'pino';
 import { getSocket } from '../whatsapp/session-manager.js';
+import { requireAccountAccess } from '../middleware/account-access.js';
 
 const logger = pino({ level: process.env.LOG_LEVEL ?? 'info' });
 export const mediaRouter = Router();
 
-mediaRouter.post('/download', async (req, res) => {
+mediaRouter.post('/download', requireAccountAccess((req) => String(req.body?.waAccountId ?? '') || undefined), async (req, res) => {
   const { waAccountId, message } = req.body ?? {};
 
   if (!waAccountId || !message) {
