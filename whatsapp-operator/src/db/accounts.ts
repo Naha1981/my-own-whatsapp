@@ -16,7 +16,7 @@ export interface WaBinding {
   wa_account_id: string;
   app_id: string;
   tenant_id: string;
-  webhook_url: string;
+  webhook_url: string | null;
   is_active: boolean;
 }
 
@@ -67,7 +67,7 @@ export async function createBinding(params: {
   waAccountId: string;
   appId: string;
   tenantId: string;
-  webhookUrl: string;
+  webhookUrl?: string | null;
 }): Promise<WaBinding> {
   const { rows } = await pool.query<WaBinding>(
     `INSERT INTO wa_account_bindings (wa_account_id, app_id, tenant_id, webhook_url)
@@ -75,17 +75,17 @@ export async function createBinding(params: {
      ON CONFLICT (wa_account_id, app_id, tenant_id)
      DO UPDATE SET webhook_url = EXCLUDED.webhook_url, is_active = TRUE
      RETURNING *`,
-    [params.waAccountId, params.appId, params.tenantId, params.webhookUrl]
+    [params.waAccountId, params.appId, params.tenantId, params.webhookUrl ?? null]
   );
   return rows[0];
 }
 
 export async function getActiveBindings(waAccountId: string): Promise<WaBinding[]> {
-  const { rows } = await pool.query<WaBinding>(
+  const { rows } = await pool.query<WaBinding[]>(
     `SELECT * FROM wa_account_bindings WHERE wa_account_id = $1 AND is_active = TRUE`,
     [waAccountId]
   );
-  return rows;
+  return rows as unknown as WaBinding[];
 }
 
 export async function isAiEnabled(tenantId: string): Promise<boolean> {
