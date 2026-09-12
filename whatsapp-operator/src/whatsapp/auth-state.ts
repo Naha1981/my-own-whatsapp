@@ -35,6 +35,26 @@ async function setSessionValue(waAccountId: string, key: string, value: unknown)
 }
 
 /**
+ * Delete every persisted Baileys credential/key for an account.
+ * This is intentionally used only for a deliberate reset or terminal
+ * authentication failure, never for ordinary transient reconnects.
+ */
+export async function clearPostgresAuthState(waAccountId: string): Promise<void> {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('DELETE FROM wa_signal_keys WHERE wa_account_id = $1', [waAccountId]);
+    await client.query('DELETE FROM wa_sessions WHERE wa_account_id = $1', [waAccountId]);
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+/**
  * Postgres-backed replacement for Baileys' useMultiFileAuthState().
  * Stores the main credential blob in wa_sessions and the Signal protocol
  * key store (pre-keys, sessions, sender keys) in wa_signal_keys — so a
