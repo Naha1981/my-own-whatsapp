@@ -11,15 +11,40 @@ import { forwardInboundMessage } from '../webhook/forward.js';
 const logger = pino({ level: config.logLevel });
 const RECONNECT_DELAY_MS = 5_000;
 const QR_LIFETIME_MS = 20_000;
+const PAIRING_CODE_LIFETIME_MS = 60_000;
 const VERSION_FETCH_TIMEOUT_MS = 15_000;
 const QR_SIZE_PX = 512;
+const PAIRING_READY_TIMEOUT_MS = 15_000;
 
 const sockets = new Map<string, WASocket>();
 const stopping = new Set<string>();
 const qrExpiryTimers = new Map<string, NodeJS.Timeout>();
+const qrReadyAccounts = new Set<string>();
+
+interface PairingCodeState {
+  code: string;
+  phoneNumber: string;
+  expiresAt: number;
+}
+
+const pairingCodes = new Map<string, PairingCodeState>();
 
 export function getSocket(waAccountId: string): WASocket | undefined {
   return sockets.get(waAccountId);
+}
+
+export function getPairingCode(waAccountId: string): PairingCodeState | undefined {
+  const state = pairingCodes.get(waAccountId);
+  if (!state) return undefined;
+  if (state.expiresAt <= Date.now()) {
+    pairingCodes.delete(waAccountId);
+    return undefined;
+  }
+  return state;
+}
+
+function clearPairingCode(waAccountId: string): void {
+  pairingCodes.delete(waAccountId);
 }
 
 function clearQrExpiryTimer(waAccountId: string): void {
@@ -32,6 +57,7 @@ function scheduleQrExpiry(waAccountId: string, sock: WASocket): void {
   clearQrExpiryTimer(waAccountId);
   const timer = setTimeout(async () => {
     if (sockets.get(waAccountId) !== sock) return;
+    qrReadyAccounts.delete(waAccountId);
     await updateAccount(waAccountId, {
       qr_code: null,
       qr_generated_at: null,
@@ -93,6 +119,78 @@ async function buildQrDataUrl(qr: string): Promise<string> {
   });
 }
 
+function normalizePairingPhoneNumber(value: string): string {
+  const digits = String(value ?? '').replace(/\D/g, '');
+  if (!/^\d{8,15}$/.test(digits)) {
+    throw new Error('WhatsApp phone number must contain 8–15 digits including the country code');
+  }
+  return digits;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export async function requestPairingCode(waAccountId: string, phoneNumber: string): Promise<PairingCodeState> {
+  const normalizedPhoneNumber = normalizePairingPhoneNumber(phoneNumber);
+  const existing = getPairingCode(waAccountId);
+  if (existing) {
+    if (existing.phoneNumber !== normalizedPhoneNumber) {
+      throw new Error('A pairing code is already active for this account; wait for it to expire before requesting another');
+    }
+    return existing;
+  }
+
+  if (!sockets.has(waAccountId)) {
+    await startSession(waAccountId);
+  }
+
+  const deadline = Date.now() + PAIRING_READY_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    if (sockets.has(waAccountId) && qrReadyAccounts.has(waAccountId)) break;
+    await sleep(250);
+  }
+
+  const sock = sockets.get(waAccountId);
+  if (!sock) throw new Error('WhatsApp session is not available; try connecting again');
+  if (!qrReadyAccounts.has(waAccountId)) {
+    throw new Error('WhatsApp session did not become ready for phone-number pairing in time');
+  }
+
+  const code = await sock.requestPairingCode(normalizedPhoneNumber);
+  const state: PairingCodeState = {
+    code,
+    phoneNumber: normalizedPhoneNumber,
+    expiresAt: Date.now() + PAIRING_CODE_LIFETIME_MS,
+  };
+  pairingCodes.set(waAccountId, state);
+
+  clearQrExpiryTimer(waAccountId);
+  await updateAccount(waAccountId, {
+    qr_code: null,
+    qr_generated_at: null,
+    qr_expires_at: null,
+    is_connected: false,
+    status: 'pairing_code_ready',
+  });
+
+  logger.info({ waAccountId, phoneNumber: normalizedPhoneNumber, expiresAt: new Date(state.expiresAt).toISOString() }, 'WhatsApp pairing code generated');
+
+  setTimeout(() => {
+    const current = pairingCodes.get(waAccountId);
+    if (current?.code === code && current.expiresAt <= Date.now()) {
+      pairingCodes.delete(waAccountId);
+      if (sockets.get(waAccountId) === sock) {
+        updateAccount(waAccountId, { status: 'pairing_code_expired' }).catch((err) =>
+          logger.error({ err, waAccountId }, 'Failed to mark expired pairing code')
+        );
+      }
+    }
+  }, PAIRING_CODE_LIFETIME_MS + 100);
+
+  return state;
+}
+
 export async function startSession(waAccountId: string): Promise<void> {
   if (sockets.has(waAccountId)) {
     logger.info({ waAccountId }, 'Session already running, ignoring duplicate start');
@@ -122,6 +220,8 @@ export async function startSession(waAccountId: string): Promise<void> {
     const { connection, lastDisconnect, qr } = update;
 
     if (qr) {
+      qrReadyAccounts.add(waAccountId);
+      clearPairingCode(waAccountId);
       try {
         const qrDataUrl = await buildQrDataUrl(qr);
         const generatedAt = new Date();
@@ -143,6 +243,8 @@ export async function startSession(waAccountId: string): Promise<void> {
     }
 
     if (connection === 'open') {
+      qrReadyAccounts.delete(waAccountId);
+      clearPairingCode(waAccountId);
       clearQrExpiryTimer(waAccountId);
       logger.info({ waAccountId }, 'WhatsApp connected');
       await updateAccount(waAccountId, {
@@ -167,6 +269,8 @@ export async function startSession(waAccountId: string): Promise<void> {
       if (isCurrentSocket) {
         sockets.delete(waAccountId);
         clearQrExpiryTimer(waAccountId);
+        qrReadyAccounts.delete(waAccountId);
+        clearPairingCode(waAccountId);
       }
 
       if (stopping.has(waAccountId)) return;
@@ -252,6 +356,8 @@ export async function stopSession(waAccountId: string): Promise<void> {
   stopping.add(waAccountId);
   try {
     clearQrExpiryTimer(waAccountId);
+    qrReadyAccounts.delete(waAccountId);
+    clearPairingCode(waAccountId);
     if (sock) {
       await sock.logout().catch(() => undefined);
       if (sockets.get(waAccountId) === sock) sockets.delete(waAccountId);
