@@ -1,4 +1,5 @@
 import makeWASocket, { DisconnectReason, WASocket, fetchLatestBaileysVersion } from '@whiskeysockets/baileys';
+import type { WAVersion } from '@whiskeysockets/baileys';
 import { Boom } from '@hapi/boom';
 import QRCode from 'qrcode';
 import pino from 'pino';
@@ -41,7 +42,7 @@ function scheduleQrExpiry(waAccountId: string, sock: WASocket): void {
   qrExpiryTimers.set(waAccountId, timer);
 }
 
-async function fetchLiveWhatsAppWebVersion(): Promise<number[] | undefined> {
+async function fetchLiveWhatsAppWebVersion(): Promise<WAVersion | undefined> {
   try {
     const response = await fetch('https://web.whatsapp.com/sw.js', {
       headers: {
@@ -56,7 +57,7 @@ async function fetchLiveWhatsAppWebVersion(): Promise<number[] | undefined> {
     const match = body.match(/\\?"client_revision\\?":\s*(\d+)/);
     if (!match?.[1]) throw new Error('client_revision not found in WhatsApp Web sw.js');
 
-    const version = [2, 3000, Number(match[1])];
+    const version: WAVersion = [2, 3000, Number(match[1])];
     logger.info({ version: version.join('.') }, 'Resolved live WhatsApp Web version');
     return version;
   } catch (err) {
@@ -65,7 +66,7 @@ async function fetchLiveWhatsAppWebVersion(): Promise<number[] | undefined> {
   }
 }
 
-async function resolveBaileysVersion(): Promise<number[] | undefined> {
+async function resolveBaileysVersion(): Promise<WAVersion | undefined> {
   const liveVersion = await fetchLiveWhatsAppWebVersion();
   if (liveVersion) return liveVersion;
 
