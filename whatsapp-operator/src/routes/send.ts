@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { getSocket, sendMessage } from '../whatsapp/session-manager.js';
+import { requireAccountAccess } from '../middleware/account-access.js';
 
 export const sendRouter = Router();
 
@@ -19,7 +20,7 @@ function requiredString(value: unknown, field: string): string {
  * Text remains backwards compatible. Rich message types use Baileys' native
  * sendMessage content contract, while the application still talks only to HTTP.
  */
-sendRouter.post('/', async (req, res) => {
+sendRouter.post('/', requireAccountAccess((req) => String(req.body?.waAccountId ?? '') || undefined), async (req, res) => {
   const body = req.body ?? {};
   const { waAccountId, to, type = 'text' } = body;
 
