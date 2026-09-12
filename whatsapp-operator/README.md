@@ -1,145 +1,212 @@
 # NahaLabs WhatsApp Operator
 
-Self-hosted, multi-tenant, QR-based WhatsApp infrastructure. No Meta Cloud API approval, no
-Twilio, no Evolution API, no monthly bill until you actually have a paying customer.
+Self-hosted, multi-tenant, QR-based WhatsApp infrastructure for NahaLabs applications. It uses
+[`@whiskeysockets/baileys`](https://github.com/WhiskeySockets/Baileys) and keeps the long-lived WhatsApp
+Web socket in one persistent Node process. Your application (the "Brain") talks to this Operator over
+HTTP; it does not import or run Baileys itself.
 
-Built on [`@whiskeysockets/baileys`](https://github.com/WhiskeySockets/Baileys) (the "Linked
-Devices" WebSocket protocol — the same one WhatsApp Web uses). Runs as **one persistent process**
-that any number of your apps can share. See `../docs/whatsapp-architecture.md` for the full
-architecture explanation.
+This is intended as a reusable bridge while an application is being validated. It does **not** replace
+WhatsApp's official business platform or remove WhatsApp's terms, account restrictions, or anti-abuse
+controls. Do not use it for spam, bulk unsolicited messaging, or other prohibited automation.
 
-## Deploy it once
+## Architecture
 
-You need: a small always-on Node.js host (Render, Fly.io, Railway, or your own Docker host — **not**
-a serverless function, the socket must stay open 24/7) and a Postgres database.
+```text
+Brain app(s) ──HTTP + OPERATOR_API_KEY──▶ WhatsApp Operator ──Baileys──▶ WhatsApp
+       ▲                                      │
+       └──── signed webhook ◀─────────────────┤
+                                              │
+                                      shared PostgreSQL
+```
+
+The Operator owns one live socket per `waAccountId`. PostgreSQL stores credentials and Signal keys so
+normal Operator restarts/redeploys do not require another QR scan. Run one Operator process unless you
+add cross-instance socket ownership/locking.
+
+## Environment
+
+Required Operator variables:
 
 ```bash
-cd whatsapp-operator
-cp .env.example .env      # fill in DATABASE_URL, generate WEBHOOK_SECRET and OPERATOR_API_KEY
+DATABASE_URL=...
+WEBHOOK_SECRET=...
+OPERATOR_API_KEY=...
+PORT=3001
+LOG_LEVEL=info
+NODE_ENV=production
+```
+
+Application-side variables are documented in the repository `.env.example`:
+
+```bash
+OPERATOR_URL=https://your-operator.example.com
+OPERATOR_API_KEY=the-same-secret-as-the-operator
+WEBHOOK_SECRET=the-same-secret-as-the-operator
+NEXT_PUBLIC_APP_ID=your-app-slug
+NEXT_PUBLIC_APP_URL=https://your-app.example.com
+```
+
+In production, account creation rejects localhost webhook targets; use a public HTTPS webhook URL.
+
+## Database
+
+Initialize or upgrade the Operator database with:
+
+```bash
 psql "$DATABASE_URL" -f db/schema.sql
-
-npm install
-npm run dev                # local dev
-# or
-npm run build && npm start # production
-# or
-docker build -t nahalabs-whatsapp-operator . && docker run --env-file .env -p 3001:3001 nahalabs-whatsapp-operator
 ```
 
-Generate strong secrets:
+The schema contains:
+
+- `wa_accounts` — connected WhatsApp identities and current QR/status snapshot.
+- `wa_sessions` and `wa_signal_keys` — persisted Baileys authentication and Signal state.
+- `wa_account_bindings` — app/tenant ownership plus inbound webhook destinations.
+- `wa_controls` and `wa_blocklist` — application-level safety switches/opt-outs.
+- `wa_webhook_dead_letters` — durable record of webhook deliveries that failed all retries.
+
+## Development and production
+
 ```bash
-openssl rand -hex 32   # for WEBHOOK_SECRET
-openssl rand -hex 32   # for OPERATOR_API_KEY
+npm install
+npm run dev
+npm run typecheck
+npm run build
+npm start
 ```
 
-## The business-owner QR flow
+Or use the provided Dockerfile / Render Blueprint. The socket must live in a persistent process, not in a
+serverless or edge function.
 
-1. **Your app** (the "Brain") calls `POST /accounts` to create a WhatsApp account for that
-   business and bind it to your app + tenant.
-2. Your app calls `POST /accounts/:id/connect`, then polls `GET /accounts/:id/qr` every couple of
-   seconds and shows the returned `qrCode` (a base64 PNG data URL) in the owner's dashboard.
-3. Owner scans it once with WhatsApp → Linked Devices. `status` flips to `connected`.
-4. They can now display/download that same number's QR (or a `wa.me/<number>` link) from their
-   dashboard to share with their own customers.
-5. Customer messages arrive at your app's `webhookUrl`, signed with `X-Webhook-Signature`
-   (HMAC-SHA256 over the raw JSON body, using `WEBHOOK_SECRET`) — verify it before trusting the
-   payload.
-6. Your app replies by calling `POST /send`.
+## API
 
-## API reference
+All routes except `/health` require either:
 
-All routes except `/health` require `Authorization: Bearer <OPERATOR_API_KEY>`.
+```text
+X-API-Key: <OPERATOR_API_KEY>
+```
 
-### `POST /accounts`
-Create a WhatsApp account and bind it to your app.
+or the backwards-compatible form:
+
+```text
+Authorization: Bearer <OPERATOR_API_KEY>
+```
+
+### Create an account
+
+`POST /accounts`
+
 ```json
-// request
-{ "label": "Thabo's Salon", "appId": "flavourly", "tenantId": "tenant_123", "webhookUrl": "https://flavourly.vercel.app/api/webhooks/whatsapp" }
-// response 201
+{
+  "label": "Thabo's Salon",
+  "appId": "flavourly",
+  "tenantId": "tenant_123",
+  "webhookUrl": "https://flavourly.example.com/api/webhooks/whatsapp"
+}
+```
+
+Response:
+
+```json
 { "waAccountId": "uuid", "status": "pending" }
 ```
 
-### `POST /accounts/:id/connect`
-Starts the WhatsApp socket and begins generating a QR code.
+### Connect / pair
+
+`POST /accounts/:id/connect`
+
+Then poll `GET /accounts/:id/qr` every 2–5 seconds while pairing:
+
 ```json
-{ "waAccountId": "uuid", "status": "connecting" }
+{
+  "status": "qr_ready",
+  "isConnected": false,
+  "qrCode": "data:image/png;base64,..."
+}
 ```
 
-### `GET /accounts/:id/qr`
-Poll while connecting the device.
-```json
-{ "status": "qr_ready", "isConnected": false, "qrCode": "data:image/png;base64,..." }
-```
-
-### `GET /accounts/:id/status`
-```json
-{ "waAccountId": "uuid", "status": "connected", "isConnected": true, "phoneNumber": "27821234567" }
-```
-
-### `POST /accounts/:id/disconnect`
-Logs the device out. Owner must re-scan a fresh QR code to reconnect.
-
-### `POST /send`
-```json
-// request
-{ "waAccountId": "uuid", "to": "27821234567", "text": "Your order is confirmed." }
-// response
-{ "ok": true }
-```
-
-### `GET /health`
-No auth required. `{ "status": "ok", "service": "nahalabs-whatsapp-operator", "timestamp": "..." }`.
-Point your keep-alive scheduler (cron-job.org, UptimeRobot) at this every 5–10 minutes on free-tier
-hosts that sleep on idle.
-
-## Inbound webhook payload (sent to `webhookUrl`)
+When WhatsApp accepts the link, `GET /accounts/:id/status` returns:
 
 ```json
 {
   "waAccountId": "uuid",
-  "appId": "flavourly",
-  "tenantId": "tenant_123",
-  "message": { "...": "raw Baileys WAMessage object" },
-  "deliveredAt": "2026-09-04T10:00:00.000Z"
-}
-```
-Header: `X-Webhook-Signature: <hmac-sha256 hex>`. Verify with the same `WEBHOOK_SECRET`:
-
-```ts
-import crypto from 'node:crypto';
-
-function verify(secret: string, rawBody: string, signature: string) {
-  const expected = crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
-  return crypto.timingSafeEqual(Buffer.from(expected, 'hex'), Buffer.from(signature, 'hex'));
+  "status": "connected",
+  "isConnected": true,
+  "phoneNumber": "27821234567"
 }
 ```
 
-## One Operator, many apps
+The Operator resolves a WhatsApp Web version before each socket creation and logs the resolved version.
+If resolution fails, Baileys' internal fallback is used and the failure is logged. The QR timeout is set
+explicitly to 20 seconds.
 
-Give every app the same `OPERATOR_URL` and `OPERATOR_API_KEY`. Each app creates its own
-`wa_account` per business (or reuses one), with its own `webhookUrl`. The Operator resolves each
-inbound message to the right app via `wa_account_bindings` — see `db/schema.sql`.
+### Reset a broken pairing/session
 
-## Operating notes
+`POST /accounts/:id/reset`
 
-- **One Operator process** holds the in-memory socket map. Scale it vertically (bigger instance),
-  not horizontally, unless you add cross-instance socket locking — running two instances against
-  the same accounts will cause conflicting sessions.
-- Session credentials live in Postgres (`wa_sessions`, `wa_signal_keys`), not on local disk, so a
-  redeploy or restart does **not** require re-scanning the QR code.
-- If a device is logged out from the phone (owner unlinks it in WhatsApp), the Operator will
-  **not** auto-reconnect — `status` becomes `logged_out` and the owner must scan a fresh QR code.
-- Webhook delivery retries 3 times with linear backoff; failures are logged. For production,
-  extend `src/webhook/forward.ts` to write failures to a dead-letter table instead of only logging
-  (flagged with a `TODO` in the code) — this repo intentionally ships the simplest correct version.
-- `wa_controls` and `wa_blocklist` tables are provisioned for a global AI kill-switch, per-tenant
-  manual mode, and STOP/UNSUBSCRIBE compliance — wire them into your app's business logic; the
-  Operator only stores them, your app's webhook handler should check them before auto-replying.
+This stops the live socket, clears all persisted Baileys credentials and Signal keys, clears the QR/phone
+snapshot, and returns the account to `pending`. Connect again to obtain a fresh QR.
 
-## What this is not
+### Disconnect
 
-This is a starting point, not a finished managed product. Before a regulated client (bank,
-insurer, government) goes live on it: add structured audit logging of every message and admin
-action, a dead-letter queue for failed webhook deliveries, rate limiting on `/send`, and a
-documented recovery runbook — see `../docs/SECURITY_CHECKLIST.md` and
-`../docs/ENGINEERING_CONSTITUTION.md`.
+`POST /accounts/:id/disconnect`
+
+This logs the account out and clears persisted authentication so the next connection is a clean pair.
+
+### Send
+
+`POST /send`
+
+```json
+{ "waAccountId": "uuid", "to": "27821234567", "text": "Your order is confirmed." }
+```
+
+### Health
+
+`GET /health`
+
+```json
+{ "status": "ok", "service": "nahalabs-whatsapp-operator", "timestamp": "..." }
+```
+
+## Reconnect and diagnostics
+
+The close handler logs the disconnect status **before** any stale-socket guard. A stale socket is never
+allowed to delete or replace the current account socket.
+
+- Ordinary transient disconnects reconnect after a short backoff without purging credentials.
+- `loggedOut` purges persisted auth and requires a fresh scan.
+- `500` / bad-session closes purge persisted auth and restart clean.
+- `connectionReplaced` is treated as terminal for the current process rather than causing a reconnect loop.
+- The low-level `CB:iq,,pair-success` event is explicitly logged when received.
+
+When troubleshooting QR pairing, inspect logs in this order:
+
+1. Is the deployed commit the code you expect?
+2. Is a current QR being generated and refreshed?
+3. Does the log contain `WhatsApp pairing success received` after the real phone scan?
+4. What `statusCode` and error message were logged on close?
+5. Are `DATABASE_URL`, `WEBHOOK_SECRET`, and `OPERATOR_API_KEY` identical wherever the two services share them?
+6. Only then investigate account/number trust or WhatsApp-side refusal.
+
+A QR timing out with no pairing-success signal is not itself a QR-generation bug; the underlying failure
+may be on WhatsApp's side.
+
+## Webhooks
+
+Inbound messages are delivered to the active binding's `webhookUrl` with:
+
+```text
+X-Webhook-Signature: <HMAC-SHA256 hex>
+```
+
+The HMAC uses `WEBHOOK_SECRET`. Failed deliveries receive three attempts with linear backoff; after
+that the payload is persisted to `wa_webhook_dead_letters` for explicit recovery tooling.
+
+## Security and scaling rules
+
+- Keep `OPERATOR_API_KEY` and `WEBHOOK_SECRET` out of source control.
+- Verify the webhook signature before trusting inbound data.
+- Keep the Operator on one persistent instance unless socket ownership/locking is implemented.
+- Do not expose unauthenticated account, QR, status, reset, or send endpoints.
+- Add application-level authorization so a tenant cannot operate another tenant's `waAccountId`.
+- Add rate limiting and audit logging before regulated/high-volume production use.
