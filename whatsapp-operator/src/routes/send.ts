@@ -1,5 +1,6 @@
 import { Router } from 'express';
-import { getSocket, sendMessage } from '../whatsapp/session-manager.js';
+import type { WAMessage } from '@whiskeysockets/baileys';
+import { getSocket } from '../whatsapp/session-manager.js';
 import { requireAccountAccess } from '../middleware/account-access.js';
 
 export const sendRouter = Router();
@@ -7,17 +8,35 @@ export const sendRouter = Router();
 function jidForRecipient(value: string): string {
   if (value.includes('@s.whatsapp.net') || value.includes('@g.us')) return value;
   const digits = value.replace(/\D/g, '');
-  if (!digits) throw new Error('Recipient must contain a WhatsApp phone number');
+  if (!/^\d{5,20}$/.test(digits)) throw new Error('Recipient must contain a valid WhatsApp phone number');
   return `${digits}@s.whatsapp.net`;
 }
 
 function requiredString(value: unknown, field: string): string {
   if (typeof value !== 'string' || !value.trim()) throw new Error(`${field} is required`);
-  return value;
+  return value.trim();
 }
 
 function optionalString(value: unknown): string | undefined {
-  return typeof value === 'string' && value.trim() ? value : undefined;
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function httpUrl(value: unknown, field: string): string {
+  const input = requiredString(value, field);
+  let parsed: URL;
+  try {
+    parsed = new URL(input);
+  } catch {
+    throw new Error(`${field} must be a valid URL`);
+  }
+  if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error(`${field} must use http or https`);
+  return input;
+}
+
+function quotedMessage(value: unknown): WAMessage | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'object' || Array.isArray(value)) throw new Error('quotedMessage must be a WhatsApp message object');
+  return value as WAMessage;
 }
 
 /**
@@ -34,13 +53,14 @@ sendRouter.post('/', requireAccountAccess((req) => String(req.body?.waAccountId 
   }
 
   try {
+    const quote = quotedMessage(body.quotedMessage);
+
     if (type === 'text') {
       const text = requiredString(body.text, 'text');
       const jid = jidForRecipient(String(to));
       const sock = getSocket(waAccountId);
       if (!sock) throw new Error(`No active WhatsApp session for account ${waAccountId}. Has it been connected?`);
-      const quoted = body.quotedMessage && typeof body.quotedMessage === 'object' ? { quoted: body.quotedMessage } : undefined;
-      const result = await sock.sendMessage(jid, { text }, quoted as any);
+      const result = await sock.sendMessage(jid, { text }, quote ? { quoted: quote } : undefined);
       res.json({ ok: true, type: 'text', message: result });
       return;
     }
@@ -52,29 +72,29 @@ sendRouter.post('/', requireAccountAccess((req) => String(req.body?.waAccountId 
     const content = (() => {
       switch (type) {
         case 'image':
-          return { image: { url: requiredString(body.url, 'url') }, caption: optionalString(body.caption) };
+          return { image: { url: httpUrl(body.url, 'url') }, ...(optionalString(body.caption) ? { caption: optionalString(body.caption) } : {}) };
         case 'video':
           return {
-            video: { url: requiredString(body.url, 'url') },
-            caption: optionalString(body.caption),
-            gifPlayback: body.gifPlayback === true,
-            ptv: body.ptv === true,
+            video: { url: httpUrl(body.url, 'url') },
+            ...(optionalString(body.caption) ? { caption: optionalString(body.caption) } : {}),
+            ...(body.gifPlayback === true ? { gifPlayback: true } : {}),
+            ...(body.ptv === true ? { ptv: true } : {}),
           };
         case 'audio':
           return {
-            audio: { url: requiredString(body.url, 'url') },
+            audio: { url: httpUrl(body.url, 'url') },
             mimetype: optionalString(body.mimetype) ?? 'audio/ogg; codecs=opus',
             ptt: body.ptt === true,
           };
         case 'document':
           return {
-            document: { url: requiredString(body.url, 'url') },
+            document: { url: httpUrl(body.url, 'url') },
             mimetype: optionalString(body.mimetype) ?? 'application/octet-stream',
             fileName: requiredString(body.fileName, 'fileName'),
-            caption: optionalString(body.caption),
+            ...(optionalString(body.caption) ? { caption: optionalString(body.caption) } : {}),
           };
         case 'sticker':
-          return { sticker: { url: requiredString(body.url, 'url') } };
+          return { sticker: { url: httpUrl(body.url, 'url') } };
         case 'location': {
           const latitude = Number(body.latitude);
           const longitude = Number(body.longitude);
@@ -100,19 +120,15 @@ sendRouter.post('/', requireAccountAccess((req) => String(req.body?.waAccountId 
           if (!Array.isArray(body.values) || body.values.length < 2 || body.values.length > 12) {
             throw new Error('poll values must contain 2–12 options');
           }
-          const values = body.values.map(String).map((value) => value.trim()).filter(Boolean);
-          if (values.length < 2 || values.length !== body.values.length) throw new Error('poll values must be non-empty strings');
+          const values = body.values.map((value: unknown) => requiredString(value, 'poll option'));
+          if (new Set(values.map((value) => value.toLowerCase())).size !== values.length) {
+            throw new Error('poll options must be unique');
+          }
           const selectableCount = Number(body.selectableCount ?? 1);
           if (!Number.isInteger(selectableCount) || selectableCount < 1 || selectableCount > values.length) {
             throw new Error(`selectableCount must be an integer from 1 to ${values.length}`);
           }
-          return {
-            poll: {
-              name: requiredString(body.name, 'name'),
-              values,
-              selectableCount,
-            },
-          };
+          return { poll: { name: requiredString(body.name, 'name'), values, selectableCount } };
         }
         case 'reaction':
           return {
@@ -131,8 +147,11 @@ sendRouter.post('/', requireAccountAccess((req) => String(req.body?.waAccountId 
       }
     })();
 
-    const quoted = body.quotedMessage && typeof body.quotedMessage === 'object' ? { quoted: body.quotedMessage } : undefined;
-    const result = await sock.sendMessage(jid, content as Parameters<typeof sock.sendMessage>[1], quoted as any);
+    const result = await sock.sendMessage(
+      jid,
+      content as Parameters<typeof sock.sendMessage>[1],
+      quote ? { quoted: quote } : undefined,
+    );
     res.json({ ok: true, type, message: result });
   } catch (err) {
     res.status(422).json({ error: 'SEND_FAILED', message: err instanceof Error ? err.message : String(err) });
