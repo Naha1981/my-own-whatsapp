@@ -6,14 +6,18 @@ Applications integrate with the Operator over HTTPS; they do not import or run B
 ## Runtime model
 
 ```text
-Application / tenant
+Business owner's own WhatsApp phone
+        |
+        | WhatsApp → Linked Devices → Link a device → Scan QR
+        v
+Application dashboard
         |
         | HTTPS + X-API-Key
         v
 NahaLabs WhatsApp Operator
         |
         +-- one Baileys socket per WhatsApp account
-        +-- QR pairing + connection lifecycle
+        +-- QR generation + expiry + connection lifecycle
         +-- Postgres-backed credentials and Signal keys
         +-- signed inbound webhooks
         +-- outbound send API
@@ -21,6 +25,9 @@ NahaLabs WhatsApp Operator
         v
      Postgres
 ```
+
+A business owner connects the business WhatsApp number by scanning the QR displayed by your application.
+The application never asks for the owner's WhatsApp password or credentials.
 
 Run one Operator process for the accounts it owns. Do not horizontally scale multiple Operator
 instances against the same account set unless cross-instance ownership/locking is introduced.
@@ -45,9 +52,9 @@ Every application consuming the Operator needs:
 
 Production webhook URLs must be public HTTPS endpoints. `localhost` and `127.0.0.1` are rejected.
 
-## API flow
+## Reliable business-owner QR flow
 
-### 1. Create an account
+### 1. Create the business WhatsApp account
 
 `POST /accounts`
 
@@ -73,20 +80,38 @@ Response:
 
 `POST /accounts/:id/connect`
 
-Then poll `GET /accounts/:id/qr` every 2–5 seconds while pairing.
+Then poll `GET /accounts/:id/qr` about every 3 seconds while pairing.
+The API explicitly disables caching because each QR is a short-lived one-time pairing value.
 
 ```json
 {
   "status": "qr_ready",
   "isConnected": false,
-  "qrCode": "data:image/png;base64,..."
+  "qrCode": "data:image/png;base64,...",
+  "qrGeneratedAt": "2026-09-12T07:00:00.000Z",
+  "qrExpiresAt": "2026-09-12T07:00:20.000Z",
+  "qrPollIntervalMs": 3000
 }
 ```
 
-Render the returned data URL directly. The Operator refreshes the QR as required by WhatsApp.
-Do not cache a QR beyond its short lifetime.
+The QR is generated as a 512×512 PNG with a white quiet zone and high error correction. Render the
+`qrCode` data URL directly as an image; do not crop it, recolor it, compress it, or place content over it.
+The optional direct image route `GET /accounts/:id/qr.png` is suitable when the frontend prefers an
+ordinary image URL instead of a data URL.
 
-### 3. Confirm connection
+### 3. Scan from the business owner's phone
+
+On the **business owner's own WhatsApp phone**:
+
+1. Open WhatsApp.
+2. Open **Linked Devices**.
+3. Choose **Link a device**.
+4. Use the phone camera to scan the QR shown in the application's dashboard.
+
+Keep the dashboard open and continue polling. When a new QR arrives, replace the displayed image with
+that new QR immediately. Never keep displaying an expired QR.
+
+### 4. Confirm connection
 
 `GET /accounts/:id/status`
 
@@ -99,7 +124,22 @@ Do not cache a QR beyond its short lifetime.
 }
 ```
 
-### 4. Receive inbound messages
+When the status becomes `connected`, hide the QR and show the business's connected WhatsApp number.
+The Operator also logs the low-level `CB:iq,,pair-success` diagnostic when available.
+
+## QR reliability rules
+
+The PDF's playbook is explicit that the QR should be programmatically decodable before blaming QR
+rendering. This implementation therefore uses a real QR encoder, a 512px PNG, high error correction,
+and a preserved quiet zone rather than a terminal-only or text representation. fileciteturn0file0L128-L135
+
+The dashboard should poll substantially faster than the QR refresh cadence. The reference recommends
+roughly 2–3 seconds; this API advertises 3000ms. fileciteturn0file0L185-L188
+
+If the QR expires, the API returns `status: "qr_expired"` and `qrCode: null`. Keep polling for the next
+fresh QR. Do not retry by reconnecting the same account repeatedly from the frontend.
+
+## 5. Receive inbound messages
 
 The Operator POSTs to the configured `webhookUrl` with:
 
@@ -122,7 +162,7 @@ X-Webhook-Signature: <sha256 hex>
 The signature is HMAC-SHA256 of the exact JSON payload using `WEBHOOK_SECRET`.
 Verify it before processing the message.
 
-### 5. Send outbound messages
+### 6. Send outbound messages
 
 `POST /send`
 
@@ -134,24 +174,23 @@ Verify it before processing the message.
 }
 ```
 
-The Operator normalizes a plain phone number to the standard WhatsApp user JID.
-
-### 6. Reset a broken or intentionally replaced session
+### 7. Reset a broken or intentionally replaced session
 
 `POST /accounts/:id/reset`
 
-Reset deletes the persisted Baileys credentials and Signal keys and returns the account to
-`pending`. The next connect call creates a fresh session and QR.
+Reset deletes the persisted Baileys credentials and Signal keys and returns the account to `pending`.
+The next connect call creates a fresh session and QR.
 
 Use reset when an account is deliberately being re-paired or when the Operator reports a terminal
 bad-session condition. Do not delete credentials for ordinary network reconnects.
 
 ## Connection lifecycle
 
-The Operator follows this recovery model:
+The Operator follows the PDF recovery model:
 
 - live WhatsApp Web revision is preferred when resolving the client version
 - Baileys' version helper is the fallback
+- QR generation is explicit, high-error-correction, and short-lived
 - socket closes are logged before stale-socket checks
 - stale sockets cannot delete a newer socket
 - ordinary disconnects reconnect without deleting credentials
@@ -159,8 +198,8 @@ The Operator follows this recovery model:
 - `connectionReplaced` does not trigger an automatic reconnect
 - successful pairing is observable through the `pair-success` diagnostic event
 
-This is deliberate. A QR can be perfectly valid while WhatsApp still refuses the device link.
-The pairing-success signal is therefore more useful than merely seeing a QR generated.
+A QR can be perfectly valid while WhatsApp still refuses the device link. The pairing-success signal is
+therefore more useful than merely seeing a QR generated. fileciteturn0file0L110-L119
 
 ## Webhook reliability
 
