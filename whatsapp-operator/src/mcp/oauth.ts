@@ -7,23 +7,12 @@ const ACCESS_TOKEN_TTL_SECONDS = 60 * 60;
 const REFRESH_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60;
 const AUTH_CODE_TTL_SECONDS = 5 * 60;
 const SUPPORTED_SCOPES = new Set(['whatsapp.read', 'whatsapp.write']);
-
 function randomToken(bytes = 32): string { return randomBytes(bytes).toString('base64url'); }
 function hashToken(token: string): string { return createHash('sha256').update(token).digest('hex'); }
-function safeEqual(a: string, b: string): boolean {
-  const left = Buffer.from(a); const right = Buffer.from(b);
-  return left.length === right.length && timingSafeEqual(left, right);
-}
+function safeEqual(a: string, b: string): boolean { const left = Buffer.from(a); const right = Buffer.from(b); return left.length === right.length && timingSafeEqual(left, right); }
 function cleanString(value: unknown): string { return typeof value === 'string' ? value.trim() : ''; }
-function normalizeScopes(value: string): string[] {
-  const scopes = value.split(/\s+/).map((scope) => scope.trim()).filter(Boolean);
-  const valid = scopes.filter((scope) => SUPPORTED_SCOPES.has(scope));
-  return valid.length > 0 ? Array.from(new Set(valid)) : ['whatsapp.read', 'whatsapp.write'];
-}
-function allowedRedirectUri(uri: string): boolean {
-  try { const parsed = new URL(uri); if (parsed.protocol === 'https:') return true; return process.env.NODE_ENV !== 'production' && parsed.hostname === 'localhost'; }
-  catch { return false; }
-}
+function normalizeScopes(value: string): string[] { const scopes = value.split(/\s+/).map((scope) => scope.trim()).filter(Boolean); const valid = scopes.filter((scope) => SUPPORTED_SCOPES.has(scope)); return valid.length > 0 ? Array.from(new Set(valid)) : ['whatsapp.read', 'whatsapp.write']; }
+function allowedRedirectUri(uri: string): boolean { try { const parsed = new URL(uri); if (parsed.protocol === 'https:') return true; return process.env.NODE_ENV !== 'production' && parsed.hostname === 'localhost'; } catch { return false; } }
 function htmlEscape(value: string): string { return value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;'); }
 function publicBaseUrl(): string { return config.mcpPublicUrl.replace(/\/$/, ''); }
 
@@ -31,11 +20,11 @@ export async function registerOAuthClient(req: Request, res: Response): Promise<
   if (!config.mcpEnabled) { res.status(404).json({ error: 'NOT_FOUND' }); return; }
   const body = req.body ?? {};
   const clientName = cleanString(body.client_name) || 'MCP Client';
-  const redirectUris = Array.isArray(body.redirect_uris) ? body.redirect_uris.map((uri: unknown) => cleanString(uri)).filter(Boolean) : [];
+  const redirectUris: string[] = Array.isArray(body.redirect_uris) ? body.redirect_uris.map((uri: unknown) => cleanString(uri)).filter((uri: string) => Boolean(uri)) : [];
   const tokenEndpointAuthMethod = cleanString(body.token_endpoint_auth_method) || 'none';
   const grantTypes = Array.isArray(body.grant_types) ? body.grant_types.map((value: unknown) => cleanString(value)) : ['authorization_code', 'refresh_token'];
   const responseTypes = Array.isArray(body.response_types) ? body.response_types.map((value: unknown) => cleanString(value)) : ['code'];
-  if (redirectUris.length === 0 || redirectUris.some((uri) => !allowedRedirectUri(uri))) { res.status(400).json({ error: 'invalid_client_metadata', error_description: 'redirect_uris must contain valid HTTPS URLs (localhost is allowed only outside production)' }); return; }
+  if (redirectUris.length === 0 || redirectUris.some((uri: string) => !allowedRedirectUri(uri))) { res.status(400).json({ error: 'invalid_client_metadata', error_description: 'redirect_uris must contain valid HTTPS URLs (localhost is allowed only outside production)' }); return; }
   if (!grantTypes.includes('authorization_code') || !responseTypes.includes('code')) { res.status(400).json({ error: 'invalid_client_metadata', error_description: 'authorization_code/code are required' }); return; }
   if (!['none', 'client_secret_post'].includes(tokenEndpointAuthMethod)) { res.status(400).json({ error: 'invalid_client_metadata', error_description: 'unsupported token_endpoint_auth_method' }); return; }
   const clientId = `mcp_${randomToken(18)}`;
@@ -44,65 +33,14 @@ export async function registerOAuthClient(req: Request, res: Response): Promise<
   await pool.query(`INSERT INTO mcp_oauth_clients (client_id, client_name, redirect_uris, client_secret_hash, token_endpoint_auth_method, created_at) VALUES ($1, $2, $3, $4, $5, now())`, [clientId, clientName, redirectUris, clientSecretHash, tokenEndpointAuthMethod]);
   res.status(201).json({ client_id: clientId, ...(clientSecret ? { client_secret: clientSecret } : {}), client_name: clientName, redirect_uris: redirectUris, grant_types: ['authorization_code', 'refresh_token'], response_types: ['code'], token_endpoint_auth_method: tokenEndpointAuthMethod });
 }
-function authorizeError(res: Response, params: { redirectUri: string; error: string; description?: string; state?: string }): void {
-  const url = new URL(params.redirectUri); url.searchParams.set('error', params.error); if (params.description) url.searchParams.set('error_description', params.description); if (params.state) url.searchParams.set('state', params.state); res.redirect(url.toString());
-}
-async function getClient(clientId: string): Promise<{ client_id: string; client_name: string; redirect_uris: string[]; client_secret_hash: string | null; token_endpoint_auth_method: string } | null> {
-  const result = await pool.query(`SELECT client_id, client_name, redirect_uris, client_secret_hash, token_endpoint_auth_method FROM mcp_oauth_clients WHERE client_id = $1`, [clientId]);
-  return result.rows[0] ?? null;
-}
-export async function oauthAuthorize(req: Request, res: Response): Promise<void> {
-  const query = req.method === 'GET' ? req.query : req.body;
-  const clientId = cleanString(query.client_id); const redirectUri = cleanString(query.redirect_uri); const responseType = cleanString(query.response_type); const codeChallenge = cleanString(query.code_challenge); const codeChallengeMethod = cleanString(query.code_challenge_method); const state = cleanString(query.state); const scope = cleanString(query.scope);
-  const client = clientId ? await getClient(clientId) : null;
-  if (!client) { res.status(400).send('Invalid client_id'); return; }
-  if (!client.redirect_uris.includes(redirectUri)) { res.status(400).send('Invalid redirect_uri'); return; }
-  if (responseType !== 'code' || !codeChallenge || codeChallengeMethod !== 'S256') { authorizeError(res, { redirectUri, error: 'invalid_request', description: 'Authorization code + PKCE S256 are required', state }); return; }
-  if (!config.mcpOauthPassword) { res.status(503).send('Remote MCP OAuth is not configured. Set MCP_OAUTH_PASSWORD on the Operator.'); return; }
-  const requestedScopes = normalizeScopes(scope);
-  if (req.method === 'GET') {
-    const hidden: Record<string, string> = { client_id: clientId, redirect_uri: redirectUri, response_type: responseType, code_challenge: codeChallenge, code_challenge_method: codeChallengeMethod, scope: requestedScopes.join(' '), ...(state ? { state } : {}) };
-    const fields = Object.entries(hidden).map(([key, value]) => `<input type="hidden" name="${htmlEscape(key)}" value="${htmlEscape(value)}">`).join('');
-    res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'"); res.setHeader('X-Frame-Options', 'DENY'); res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.send(`<!doctype html><html><head><meta charset="utf-8"><title>Connect NahaLabs WhatsApp</title><style>body{font-family:system-ui;max-width:520px;margin:60px auto;padding:24px}input{width:100%;box-sizing:border-box;margin:8px 0 16px;padding:12px}button{padding:12px 16px}small{color:#666}</style></head><body><h1>Connect NahaLabs WhatsApp</h1><p><strong>${htmlEscape(client.client_name)}</strong> is requesting access to your NahaLabs WhatsApp Operator.</p><p><small>Access: ${htmlEscape(requestedScopes.join(', '))}</small></p><form method="post" action="/oauth/authorize">${fields}<label>Username<input name="username" autocomplete="username" required value="${htmlEscape(config.mcpOauthUsername)}"></label><label>Access password<input type="password" name="password" autocomplete="current-password" required></label><button type="submit">Authorize</button></form></body></html>`); return;
-  }
-  const username = cleanString(req.body?.username); const password = cleanString(req.body?.password);
-  if (username !== config.mcpOauthUsername || !safeEqual(password, config.mcpOauthPassword)) { res.status(401).send('Invalid credentials'); return; }
-  const code = randomToken(32);
-  await pool.query(`INSERT INTO mcp_oauth_codes (code_hash, client_id, redirect_uri, code_challenge, scope, expires_at, created_at) VALUES ($1, $2, $3, $4, $5, now() + ($6 * interval '1 second'), now())`, [hashToken(code), clientId, redirectUri, codeChallenge, requestedScopes.join(' '), AUTH_CODE_TTL_SECONDS]);
-  const callback = new URL(redirectUri); callback.searchParams.set('code', code); if (state) callback.searchParams.set('state', state); res.redirect(callback.toString());
-}
+function authorizeError(res: Response, params: { redirectUri: string; error: string; description?: string; state?: string }): void { const url = new URL(params.redirectUri); url.searchParams.set('error', params.error); if (params.description) url.searchParams.set('error_description', params.description); if (params.state) url.searchParams.set('state', params.state); res.redirect(url.toString()); }
+async function getClient(clientId: string): Promise<{ client_id: string; client_name: string; redirect_uris: string[]; client_secret_hash: string | null; token_endpoint_auth_method: string } | null> { const result = await pool.query(`SELECT client_id, client_name, redirect_uris, client_secret_hash, token_endpoint_auth_method FROM mcp_oauth_clients WHERE client_id = $1`, [clientId]); return result.rows[0] ?? null; }
+export async function oauthAuthorize(req: Request, res: Response): Promise<void> { const query = req.method === 'GET' ? req.query : req.body; const clientId = cleanString(query.client_id); const redirectUri = cleanString(query.redirect_uri); const responseType = cleanString(query.response_type); const codeChallenge = cleanString(query.code_challenge); const codeChallengeMethod = cleanString(query.code_challenge_method); const state = cleanString(query.state); const scope = cleanString(query.scope); const client = clientId ? await getClient(clientId) : null; if (!client) { res.status(400).send('Invalid client_id'); return; } if (!client.redirect_uris.includes(redirectUri)) { res.status(400).send('Invalid redirect_uri'); return; } if (responseType !== 'code' || !codeChallenge || codeChallengeMethod !== 'S256') { authorizeError(res, { redirectUri, error: 'invalid_request', description: 'Authorization code + PKCE S256 are required', state }); return; } if (!config.mcpOauthPassword) { res.status(503).send('Remote MCP OAuth is not configured. Set MCP_OAUTH_PASSWORD on the Operator.'); return; } const requestedScopes = normalizeScopes(scope); if (req.method === 'GET') { const hidden: Record<string, string> = { client_id: clientId, redirect_uri: redirectUri, response_type: responseType, code_challenge: codeChallenge, code_challenge_method: codeChallengeMethod, scope: requestedScopes.join(' '), ...(state ? { state } : {}) }; const fields = Object.entries(hidden).map(([key, value]) => `<input type="hidden" name="${htmlEscape(key)}" value="${htmlEscape(value)}">`).join(''); res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'"); res.setHeader('X-Frame-Options', 'DENY'); res.setHeader('X-Content-Type-Options', 'nosniff'); res.send(`<!doctype html><html><head><meta charset="utf-8"><title>Connect NahaLabs WhatsApp</title><style>body{font-family:system-ui;max-width:520px;margin:60px auto;padding:24px}input{width:100%;box-sizing:border-box;margin:8px 0 16px;padding:12px}button{padding:12px 16px}small{color:#666}</style></head><body><h1>Connect NahaLabs WhatsApp</h1><p><strong>${htmlEscape(client.client_name)}</strong> is requesting access to your NahaLabs WhatsApp Operator.</p><p><small>Access: ${htmlEscape(requestedScopes.join(', '))}</small></p><form method="post" action="/oauth/authorize">${fields}<label>Username<input name="username" autocomplete="username" required value="${htmlEscape(config.mcpOauthUsername)}"></label><label>Access password<input type="password" name="password" autocomplete="current-password" required></label><button type="submit">Authorize</button></form></body></html>`); return; } const username = cleanString(req.body?.username); const password = cleanString(req.body?.password); if (username !== config.mcpOauthUsername || !safeEqual(password, config.mcpOauthPassword)) { res.status(401).send('Invalid credentials'); return; } const code = randomToken(32); await pool.query(`INSERT INTO mcp_oauth_codes (code_hash, client_id, redirect_uri, code_challenge, scope, expires_at, created_at) VALUES ($1, $2, $3, $4, $5, now() + ($6 * interval '1 second'), now())`, [hashToken(code), clientId, redirectUri, codeChallenge, requestedScopes.join(' '), AUTH_CODE_TTL_SECONDS]); const callback = new URL(redirectUri); callback.searchParams.set('code', code); if (state) callback.searchParams.set('state', state); res.redirect(callback.toString()); }
 function clientSecretFromRequest(req: Request): string { const authorization = cleanString(req.header('authorization')); if (authorization.toLowerCase().startsWith('basic ')) { try { const decoded = Buffer.from(authorization.slice(6), 'base64').toString('utf8'); return decoded.split(':').slice(1).join(':'); } catch { return ''; } } return cleanString(req.body?.client_secret); }
 async function authenticateClient(req: Request, clientId: string): Promise<boolean> { const client = await getClient(clientId); if (!client) return false; if (client.token_endpoint_auth_method === 'none') return true; if (!client.client_secret_hash) return false; return safeEqual(hashToken(clientSecretFromRequest(req)), client.client_secret_hash); }
-export async function oauthToken(req: Request, res: Response): Promise<void> {
-  const grantType = cleanString(req.body?.grant_type); const clientId = cleanString(req.body?.client_id);
-  if (!clientId || !(await authenticateClient(req, clientId))) { res.status(401).json({ error: 'invalid_client' }); return; }
-  if (grantType === 'authorization_code') {
-    const code = cleanString(req.body?.code); const redirectUri = cleanString(req.body?.redirect_uri); const codeVerifier = cleanString(req.body?.code_verifier);
-    if (!code || !redirectUri || !codeVerifier) { res.status(400).json({ error: 'invalid_request' }); return; }
-    const result = await pool.query(`DELETE FROM mcp_oauth_codes WHERE code_hash = $1 AND client_id = $2 AND redirect_uri = $3 AND expires_at > now() AND used_at IS NULL RETURNING code_challenge, scope`, [hashToken(code), clientId, redirectUri]);
-    const row = result.rows[0]; if (!row) { res.status(400).json({ error: 'invalid_grant' }); return; }
-    const verifierChallenge = createHash('sha256').update(codeVerifier).digest('base64url'); if (!safeEqual(verifierChallenge, String(row.code_challenge))) { res.status(400).json({ error: 'invalid_grant' }); return; }
-    return issueTokens(res, clientId, String(row.scope ?? 'whatsapp.read whatsapp.write'));
-  }
-  if (grantType === 'refresh_token') {
-    const refreshToken = cleanString(req.body?.refresh_token); if (!refreshToken) { res.status(400).json({ error: 'invalid_request' }); return; }
-    const result = await pool.query(`SELECT client_id, scope, revoked_at, refresh_expires_at FROM mcp_oauth_tokens WHERE refresh_token_hash = $1`, [hashToken(refreshToken)]); const tokenRow = result.rows[0];
-    if (!tokenRow || tokenRow.revoked_at || new Date(tokenRow.refresh_expires_at).getTime() <= Date.now()) { res.status(400).json({ error: 'invalid_grant' }); return; }
-    await pool.query(`UPDATE mcp_oauth_tokens SET revoked_at = now() WHERE refresh_token_hash = $1`, [hashToken(refreshToken)]); return issueTokens(res, clientId, String(tokenRow.scope));
-  }
-  res.status(400).json({ error: 'unsupported_grant_type' });
-}
-async function issueTokens(res: Response, clientId: string, scope: string): Promise<void> {
-  const accessToken = randomToken(32); const refreshToken = randomToken(32);
-  await pool.query(`INSERT INTO mcp_oauth_tokens (access_token_hash, refresh_token_hash, client_id, app_id, tenant_id, scope, access_expires_at, refresh_expires_at, created_at) VALUES ($1, $2, $3, $4, $5, $6, now() + ($7 * interval '1 second'), now() + ($8 * interval '1 second'), now())`, [hashToken(accessToken), hashToken(refreshToken), clientId, config.mcpAppId, config.mcpTenantId, scope, ACCESS_TOKEN_TTL_SECONDS, REFRESH_TOKEN_TTL_SECONDS]);
-  res.setHeader('Cache-Control', 'no-store'); res.setHeader('Pragma', 'no-cache'); res.json({ access_token: accessToken, token_type: 'Bearer', expires_in: ACCESS_TOKEN_TTL_SECONDS, refresh_token: refreshToken, scope });
-}
-export async function verifyAccessToken(token: string): Promise<{ clientId: string; appId: string; tenantId: string; scopes: string[]; expiresAt: number } | null> {
-  const result = await pool.query(`SELECT client_id, app_id, tenant_id, scope, access_expires_at, revoked_at FROM mcp_oauth_tokens WHERE access_token_hash = $1`, [hashToken(token)]); const row = result.rows[0]; if (!row || row.revoked_at) return null;
-  const expiresAtMs = new Date(row.access_expires_at).getTime(); if (expiresAtMs <= Date.now()) return null;
-  return { clientId: String(row.client_id), appId: String(row.app_id), tenantId: String(row.tenant_id), scopes: String(row.scope ?? '').split(/\s+/).filter(Boolean), expiresAt: Math.floor(expiresAtMs / 1000) };
-}
+export async function oauthToken(req: Request, res: Response): Promise<void> { const grantType = cleanString(req.body?.grant_type); const clientId = cleanString(req.body?.client_id); if (!clientId || !(await authenticateClient(req, clientId))) { res.status(401).json({ error: 'invalid_client' }); return; } if (grantType === 'authorization_code') { const code = cleanString(req.body?.code); const redirectUri = cleanString(req.body?.redirect_uri); const codeVerifier = cleanString(req.body?.code_verifier); if (!code || !redirectUri || !codeVerifier) { res.status(400).json({ error: 'invalid_request' }); return; } const result = await pool.query(`DELETE FROM mcp_oauth_codes WHERE code_hash = $1 AND client_id = $2 AND redirect_uri = $3 AND expires_at > now() AND used_at IS NULL RETURNING code_challenge, scope`, [hashToken(code), clientId, redirectUri]); const row = result.rows[0]; if (!row) { res.status(400).json({ error: 'invalid_grant' }); return; } const verifierChallenge = createHash('sha256').update(codeVerifier).digest('base64url'); if (!safeEqual(verifierChallenge, String(row.code_challenge))) { res.status(400).json({ error: 'invalid_grant' }); return; } return issueTokens(res, clientId, String(row.scope ?? 'whatsapp.read whatsapp.write')); } if (grantType === 'refresh_token') { const refreshToken = cleanString(req.body?.refresh_token); if (!refreshToken) { res.status(400).json({ error: 'invalid_request' }); return; } const result = await pool.query(`SELECT client_id, scope, revoked_at, refresh_expires_at FROM mcp_oauth_tokens WHERE refresh_token_hash = $1`, [hashToken(refreshToken)]); const tokenRow = result.rows[0]; if (!tokenRow || tokenRow.revoked_at || new Date(tokenRow.refresh_expires_at).getTime() <= Date.now()) { res.status(400).json({ error: 'invalid_grant' }); return; } await pool.query(`UPDATE mcp_oauth_tokens SET revoked_at = now() WHERE refresh_token_hash = $1`, [hashToken(refreshToken)]); return issueTokens(res, clientId, String(tokenRow.scope)); } res.status(400).json({ error: 'unsupported_grant_type' }); }
+async function issueTokens(res: Response, clientId: string, scope: string): Promise<void> { const accessToken = randomToken(32); const refreshToken = randomToken(32); await pool.query(`INSERT INTO mcp_oauth_tokens (access_token_hash, refresh_token_hash, client_id, app_id, tenant_id, scope, access_expires_at, refresh_expires_at, created_at) VALUES ($1, $2, $3, $4, $5, $6, now() + ($7 * interval '1 second'), now() + ($8 * interval '1 second'), now())`, [hashToken(accessToken), hashToken(refreshToken), clientId, config.mcpAppId, config.mcpTenantId, scope, ACCESS_TOKEN_TTL_SECONDS, REFRESH_TOKEN_TTL_SECONDS]); res.setHeader('Cache-Control', 'no-store'); res.setHeader('Pragma', 'no-cache'); res.json({ access_token: accessToken, token_type: 'Bearer', expires_in: ACCESS_TOKEN_TTL_SECONDS, refresh_token: refreshToken, scope }); }
+export async function verifyAccessToken(token: string): Promise<{ clientId: string; appId: string; tenantId: string; scopes: string[]; expiresAt: number } | null> { const result = await pool.query(`SELECT client_id, app_id, tenant_id, scope, access_expires_at, revoked_at FROM mcp_oauth_tokens WHERE access_token_hash = $1`, [hashToken(token)]); const row = result.rows[0]; if (!row || row.revoked_at) return null; const expiresAtMs = new Date(row.access_expires_at).getTime(); if (expiresAtMs <= Date.now()) return null; return { clientId: String(row.client_id), appId: String(row.app_id), tenantId: String(row.tenant_id), scopes: String(row.scope ?? '').split(/\s+/).filter(Boolean), expiresAt: Math.floor(expiresAtMs / 1000) }; }
 export function protectedResourceMetadata(): Record<string, unknown> { return { resource: `${publicBaseUrl()}/mcp`, authorization_servers: [publicBaseUrl()], scopes_supported: ['whatsapp.read', 'whatsapp.write'], bearer_methods_supported: ['header'] }; }
 export function authorizationServerMetadata(): Record<string, unknown> { return { issuer: publicBaseUrl(), authorization_endpoint: `${publicBaseUrl()}/oauth/authorize`, token_endpoint: `${publicBaseUrl()}/oauth/token`, registration_endpoint: `${publicBaseUrl()}/oauth/register`, response_types_supported: ['code'], grant_types_supported: ['authorization_code', 'refresh_token'], code_challenge_methods_supported: ['S256'], token_endpoint_auth_methods_supported: ['none', 'client_secret_post'], scopes_supported: ['whatsapp.read', 'whatsapp.write'] }; }
 export function bearerChallenge(): string { return `Bearer realm="NahaLabs WhatsApp MCP", resource_metadata="${publicBaseUrl()}/.well-known/oauth-protected-resource/mcp"`; }
