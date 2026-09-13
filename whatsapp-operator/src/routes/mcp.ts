@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, type Request, type Response, type NextFunction } from 'express';
 import type { AuthInfo } from '@modelcontextprotocol/server';
 import { createMcpHandler } from '@modelcontextprotocol/server';
 import { toNodeHandler } from '@modelcontextprotocol/node';
@@ -9,21 +9,21 @@ import { createMcpServer } from '../mcp/server.js';
 export const mcpRouter = Router();
 const handler = createMcpHandler(({ authInfo }) => createMcpServer(authInfo));
 const nodeHandler = toNodeHandler(handler);
+type AuthenticatedRequest = Request & { auth?: AuthInfo };
 
-function bearerToken(req: { header(name: string): string | undefined }): string {
+function bearerToken(req: Request): string {
   const value = req.header('authorization') ?? '';
   return value.toLowerCase().startsWith('bearer ') ? value.slice(7).trim() : '';
 }
 
-async function authenticateMcp(req: import('express').Request, res: import('express').Response, next: import('express').NextFunction): Promise<void> {
+async function authenticateMcp(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
   if (!config.mcpEnabled) { res.status(404).send('Not found'); return; }
   const token = bearerToken(req);
   if (!token) { res.setHeader('WWW-Authenticate', bearerChallenge()); res.status(401).json({ error: 'invalid_token', error_description: 'Bearer access token required' }); return; }
   try {
     const verified = await verifyAccessToken(token);
     if (!verified) { res.setHeader('WWW-Authenticate', bearerChallenge()); res.status(401).json({ error: 'invalid_token', error_description: 'Access token is invalid or expired' }); return; }
-    const auth: AuthInfo = { token, clientId: verified.clientId, scopes: verified.scopes, expiresAt: verified.expiresAt, extra: { appId: verified.appId, tenantId: verified.tenantId, clientId: verified.clientId } };
-    req.auth = auth;
+    req.auth = { token, clientId: verified.clientId, scopes: verified.scopes, expiresAt: verified.expiresAt, extra: { appId: verified.appId, tenantId: verified.tenantId, clientId: verified.clientId } };
     next();
   } catch (err) { next(err); }
 }
