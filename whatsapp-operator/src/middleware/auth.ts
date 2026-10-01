@@ -7,7 +7,7 @@ import { config } from '../config.js';
  * shared OPERATOR_API_KEY. Both forms are accepted for easy integration.
  * Secret comparison is constant-time.
  */
-export function requireApiKey(req: Request, res: Response, next: NextFunction): void {
+export function hasValidApiKey(req: Request): boolean {
   const xApiKey = req.header('x-api-key') ?? '';
   const authorization = req.header('authorization') ?? '';
   const bearer = authorization.startsWith('Bearer ') ? authorization.slice(7) : '';
@@ -15,9 +15,11 @@ export function requireApiKey(req: Request, res: Response, next: NextFunction): 
 
   const expected = Buffer.from(config.operatorApiKey, 'utf8');
   const supplied = Buffer.from(token, 'utf8');
-  const valid = supplied.length === expected.length && crypto.timingSafeEqual(supplied, expected);
+  return supplied.length === expected.length && crypto.timingSafeEqual(supplied, expected);
+}
 
-  if (!valid) {
+export function requireApiKey(req: Request, res: Response, next: NextFunction): void {
+  if (!hasValidApiKey(req)) {
     res.status(401).json({ error: 'UNAUTHORIZED', message: 'Missing or invalid Operator API key' });
     return;
   }
