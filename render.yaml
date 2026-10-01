@@ -1,4 +1,4 @@
-# Render Blueprint — production-oriented configuration for the reusable WhatsApp Operator.
+# Render Blueprint — production configuration for the reusable multi-tenant WhatsApp Operator.
 # The Free plan is retained for initial testing. For client production, use an always-on
 # paid instance because Free services can sleep after 15 minutes without inbound traffic.
 services:
@@ -23,3 +23,5 @@ services:
         sync: false
       - key: OPERATOR_API_KEY
         sync: false
+      - key: ALLOW_LEGACY_TENANT_HEADERS
+        value: "true"
