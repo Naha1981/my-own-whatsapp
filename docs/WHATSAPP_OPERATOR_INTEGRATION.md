@@ -408,3 +408,35 @@ interface WhatsAppTransport {
 The current implementation is an unofficial WhatsApp Web/Linked Devices integration. It should be
 used only with numbers/accounts where that use is permitted, and it should not be presented to a
 customer as the official Meta API.
+
+
+## Tenant credential contract
+
+The Operator separates platform provisioning from tenant runtime access.
+
+### Platform operations
+
+Use `X-API-Key: OPERATOR_API_KEY` only from trusted NahaLabs backend infrastructure for:
+
+- provisioning a tenant/account;
+- issuing or rotating a tenant credential;
+- operator/admin account listing.
+
+### Tenant runtime operations
+
+The product backend stores one opaque credential per `appId + tenantId` and sends:
+
+```text
+X-NahaLabs-Tenant-Token: nlt_...
+```
+
+The Operator stores only the SHA-256 hash of the token. The token resolves to exactly one application +
+tenant scope and is then checked against the target `waAccountId` binding.
+
+Tenant credentials therefore allow Lead Machine, Flavourly, and future NahaLabs products to share one
+Operator service without sharing the platform API key with every application request.
+
+### Migration
+
+Set `ALLOW_LEGACY_TENANT_HEADERS=true` only while migrating old clients that still send the platform
+API key together with `X-App-Id` and `X-Tenant-Id`. New integrations should never use that legacy mode.
