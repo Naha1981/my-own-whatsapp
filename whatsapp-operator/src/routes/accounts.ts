@@ -109,7 +109,7 @@ accountsRouter.post('/tenant-token', requireApiKey, asyncHandler(async (req, res
  * Reuses an existing account already bound to the requested app/tenant, otherwise creates one,
  * then starts the WhatsApp session so the next step is simply pairing the real phone.
  */
-accountsRouter.post('/bootstrap', asyncHandler(async (req, res) => {
+accountsRouter.post('/bootstrap', requireApiKey, asyncHandler(async (req, res) => {
   const body = req.body ?? {};
   const label = String(body.label ?? '').trim() || 'NahaLabs WhatsApp';
   const appId = String(body.appId ?? '').trim();
@@ -173,12 +173,21 @@ accountsRouter.post('/bootstrap', asyncHandler(async (req, res) => {
   });
 }));
 
-/** Create a WhatsApp account. App/tenant scope defaults make the first-time setup beginner-friendly. */
-accountsRouter.post('/', asyncHandler(async (req, res) => {
+/** Create a WhatsApp account. Platform-key protected; returns a tenant credential only when one is first issued. */
+accountsRouter.post('/', requireApiKey, asyncHandler(async (req, res) => {
   const body = req.body ?? {};
   const label = String(body.label ?? '').trim() || 'NahaLabs WhatsApp';
-  const appId = String(body.appId ?? '').trim() || 'nahalabs';
-  const tenantId = String(body.tenantId ?? '').trim() || 'default';
+  const appId = String(body.appId ?? '').trim();
+  const tenantId = String(body.tenantId ?? '').trim();
+
+  if (!appId || !tenantId) {
+    res.status(400).json({
+      error: 'VALIDATION_ERROR',
+      message: 'appId and tenantId are required',
+    });
+    return;
+  }
+
   const webhookUrlRaw = String(body.webhookUrl ?? '').trim();
   const webhookUrl = webhookUrlRaw || null;
 
