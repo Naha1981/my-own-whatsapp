@@ -91,7 +91,11 @@ OPERATOR_API_KEY=...
 PORT=3001
 LOG_LEVEL=info
 NODE_ENV=production
+ALLOW_LEGACY_TENANT_HEADERS=false
 ```
+
+`OPERATOR_API_KEY` is now the **platform/provisioning credential**. Tenant-facing product backends
+should use a tenant credential instead and must not expose the platform key to a tenant or browser.
 
 Application-side variables are documented in the repository `.env.example`:
 
@@ -104,6 +108,66 @@ NEXT_PUBLIC_APP_URL=https://your-app.example.com
 ```
 
 In production, account creation rejects localhost webhook targets; use a public HTTPS webhook URL.
+
+## Multi-tenant authorization
+
+The Operator is shared infrastructure for NahaLabs products such as Lead Machine, Flavourly, and future
+applications. WhatsApp account access is scoped by **application + tenant**.
+
+### Platform/provisioning credential
+
+Trusted NahaLabs backend infrastructure uses:
+
+```text
+X-API-Key: <OPERATOR_API_KEY>
+```
+
+The platform credential can provision tenants, create accounts, list all accounts for operator/admin tooling,
+and issue or rotate tenant credentials. It must remain server-side.
+
+### Tenant credential
+
+After provisioning, issue a tenant credential:
+
+```
+POST /accounts/tenant-token
+X-API-Key: <OPERATOR_API_KEY>
+
+{
+  "appId": "leadmachine",
+  "tenantId": "tenant_123"
+}
+```
+
+The response contains the plaintext `tenantToken` once. The Operator stores only its SHA-256 hash.
+
+Tenant-scoped requests then use:
+
+```text
+X-NahaLabs-Tenant-Token: nlt_...
+```
+
+and do **not** need `OPERATOR_API_KEY`.
+
+Use:
+
+```
+GET /accounts/mine
+X-NahaLabs-Tenant-Token: nlt_...
+```
+
+to list only that tenant's WhatsApp accounts.
+
+All account-specific routes (`connect`, `status`, QR, pairing code, reset, disconnect) and message/media/call
+operations verify that the supplied tenant credential owns the requested `waAccountId`.
+
+### Legacy migration
+
+`ALLOW_LEGACY_TENANT_HEADERS=true` temporarily supports the previous
+`OPERATOR_API_KEY + X-App-Id + X-Tenant-Id` model. Every legacy request returns migration headers.
+
+Set it to `false` after Lead Machine, Flavourly, and other NahaLabs applications have migrated. New
+integrations should start directly with tenant credentials.
 
 ## Database
 
@@ -148,9 +212,9 @@ or the backwards-compatible form:
 Authorization: Bearer <OPERATOR_API_KEY>
 ```
 
-### Create an account
+### Provision an account
 
-`POST /accounts`
+`POST /accounts` requires the platform API key.
 
 ```json
 {
@@ -268,9 +332,12 @@ that the payload is persisted to `wa_webhook_dead_letters` for explicit recovery
 
 ## Security and scaling rules
 
-- Keep `OPERATOR_API_KEY` and `WEBHOOK_SECRET` out of source control.
+- Keep `OPERATOR_API_KEY`, tenant tokens, and `WEBHOOK_SECRET` out of source control.
+- Do not expose the platform API key to browsers or customer tenants.
+- Use `X-NahaLabs-Tenant-Token` for all tenant-facing operations.
 - Verify the webhook signature before trusting inbound data.
-- Keep the Operator on one persistent instance unless socket ownership/locking is implemented.
-- Do not expose unauthenticated account, QR, status, reset, or send endpoints.
-- Add application-level authorization so a tenant cannot operate another tenant's `waAccountId`.
+- Keep the Operator on one persistent instance unless cross-instance socket ownership/locking is implemented.
+- Do not expose unauthenticated account, QR, status, reset, disconnect, send, media, or call endpoints.
+- Account operations are authorized against the database binding for `appId + tenantId + waAccountId`.
+- Use `ALLOW_LEGACY_TENANT_HEADERS=true` only during migration; then set it to `false`.
 - Add rate limiting and audit logging before regulated/high-volume production use.
