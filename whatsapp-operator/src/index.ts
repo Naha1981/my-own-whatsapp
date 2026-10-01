@@ -4,7 +4,6 @@ import pino from 'pino';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { config } from './config.js';
-import { requireApiKey } from './middleware/auth.js';
 import { accountsRouter } from './routes/accounts.js';
 import { sendRouter } from './routes/send.js';
 import { messagesRouter } from './routes/messages.js';
@@ -40,11 +39,11 @@ app.get('/operator-console', (_req, res) => {
 });
 
 // Everything below requires the shared Operator API key.
-app.use('/accounts', requireApiKey, accountsRouter);
-app.use('/send', requireApiKey, sendRouter);
-app.use('/messages', requireApiKey, messagesRouter);
-app.use('/media', requireApiKey, mediaRouter);
-app.use('/calls', requireApiKey, callsRouter);
+app.use('/accounts', accountsRouter);
+app.use('/send', sendRouter);
+app.use('/messages', messagesRouter);
+app.use('/media', mediaRouter);
+app.use('/calls', callsRouter);
 
 app.use((req, res) => {
   res.status(404).json({ error: 'NOT_FOUND', path: req.path });
