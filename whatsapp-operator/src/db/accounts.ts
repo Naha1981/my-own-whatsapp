@@ -1,4 +1,5 @@
 import { pool } from './pool.js';
+import { generateTenantToken, hashTenantToken } from '../security/tenant-token.js';
 
 export interface WaAccount {
   id: string;
@@ -18,6 +19,80 @@ export interface WaBinding {
   tenant_id: string;
   webhook_url: string | null;
   is_active: boolean;
+}
+
+export interface TenantCredential {
+  id: string;
+  app_id: string;
+  tenant_id: string;
+  token_hash: string;
+}
+
+export async function getTenantCredential(appId: string, tenantId: string): Promise<TenantCredential | null> {
+  const { rows } = await pool.query<TenantCredential>(
+    `SELECT id, app_id, tenant_id, token_hash
+       FROM wa_tenant_credentials
+      WHERE app_id = $1 AND tenant_id = $2`,
+    [appId, tenantId]
+  );
+  return rows[0] ?? null;
+}
+
+export async function getTenantScopeByTokenHash(tokenHash: string): Promise<{ appId: string; tenantId: string } | null> {
+  const { rows } = await pool.query<{ app_id: string; tenant_id: string }>(
+    `SELECT app_id, tenant_id
+       FROM wa_tenant_credentials
+      WHERE token_hash = $1`,
+    [tokenHash]
+  );
+  if (!rows[0]) return null;
+  return { appId: rows[0].app_id, tenantId: rows[0].tenant_id };
+}
+
+/**
+ * Issue a tenant-scoped credential. The plaintext value is returned only
+ * when a credential is first created or deliberately rotated.
+ */
+export async function issueTenantCredential(
+  appId: string,
+  tenantId: string,
+  rotate = false,
+): Promise<{ token: string | null; created: boolean; rotated: boolean }> {
+  const existing = await getTenantCredential(appId, tenantId);
+  if (existing && !rotate) {
+    return { token: null, created: false, rotated: false };
+  }
+
+  const token = generateTenantToken();
+  const tokenHash = hashTenantToken(token);
+
+  await pool.query(
+    `INSERT INTO wa_tenant_credentials (app_id, tenant_id, token_hash)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (app_id, tenant_id)
+     DO UPDATE SET token_hash = EXCLUDED.token_hash, updated_at = now()`,
+    [appId, tenantId, tokenHash]
+  );
+
+  return {
+    token,
+    created: !existing,
+    rotated: Boolean(existing),
+  };
+}
+
+export async function listAccountsForScope(appId: string, tenantId: string): Promise<WaAccount[]> {
+  const { rows } = await pool.query<WaAccount>(
+    `SELECT a.*
+       FROM wa_accounts a
+       INNER JOIN wa_account_bindings b ON b.wa_account_id = a.id
+      WHERE b.app_id = $1
+        AND b.tenant_id = $2
+        AND b.is_active = TRUE
+      ORDER BY a.created_at DESC`,
+    [appId, tenantId]
+  );
+  return rows;
 }
 
 export async function createAccount(label?: string): Promise<WaAccount> {

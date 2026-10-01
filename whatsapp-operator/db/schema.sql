@@ -36,6 +36,17 @@ CREATE TABLE IF NOT EXISTS wa_signal_keys (
   PRIMARY KEY (wa_account_id, key_type, key_id)
 );
 
+CREATE TABLE IF NOT EXISTS wa_tenant_credentials (
+  id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  app_id         TEXT NOT NULL,
+  tenant_id      TEXT NOT NULL,
+  token_hash     TEXT NOT NULL,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (app_id, tenant_id),
+  UNIQUE (token_hash)
+);
+
 CREATE TABLE IF NOT EXISTS wa_account_bindings (
   id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   wa_account_id  UUID NOT NULL REFERENCES wa_accounts(id) ON DELETE CASCADE,
@@ -113,6 +124,8 @@ CREATE TABLE IF NOT EXISTS mcp_oauth_tokens (
 );
 
 CREATE INDEX IF NOT EXISTS idx_bindings_account ON wa_account_bindings(wa_account_id);
+CREATE INDEX IF NOT EXISTS idx_bindings_app_tenant_active ON wa_account_bindings(app_id, tenant_id, is_active);
+CREATE INDEX IF NOT EXISTS idx_tenant_credentials_scope ON wa_tenant_credentials(app_id, tenant_id);
 CREATE INDEX IF NOT EXISTS idx_bindings_app_tenant ON wa_account_bindings(app_id, tenant_id);
 CREATE INDEX IF NOT EXISTS idx_dead_letters_account ON wa_webhook_dead_letters(wa_account_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_accounts_qr_expiry ON wa_accounts(qr_expires_at) WHERE qr_expires_at IS NOT NULL;
