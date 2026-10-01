@@ -20,6 +20,12 @@ export const config = {
   databaseUrl: required('DATABASE_URL'),
   webhookSecret: required('WEBHOOK_SECRET'),
   operatorApiKey: required('OPERATOR_API_KEY'),
+  // Temporary migration bridge for existing NahaLabs apps. New integrations
+  // should use X-NahaLabs-Tenant-Token and can omit the platform API key.
+  allowLegacyTenantHeaders: booleanEnv(
+    'ALLOW_LEGACY_TENANT_HEADERS',
+    process.env.NODE_ENV !== 'production'
+  ),
 
   // Remote MCP is enabled by default, but its OAuth login is deliberately inert
   // until MCP_OAUTH_PASSWORD is configured. This keeps existing deployments safe
