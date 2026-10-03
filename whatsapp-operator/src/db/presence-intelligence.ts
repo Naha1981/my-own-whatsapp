@@ -68,7 +68,6 @@ interface MessageRow {
 }
 
 const ACTIVE_PRESENCE = new Set(['available', 'composing', 'recording']);
-const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 function normaliseJid(value: string): string {
   const input = value.trim();
