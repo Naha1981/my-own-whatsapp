@@ -9,6 +9,7 @@ import { sendRouter } from './routes/send.js';
 import { messagesRouter } from './routes/messages.js';
 import { mediaRouter } from './routes/media.js';
 import { callsRouter } from './routes/calls.js';
+import { presenceRouter } from './routes/presence.js';
 import { healthRouter } from './routes/health.js';
 import { mcpRouter } from './routes/mcp.js';
 import { pool } from './db/pool.js';
@@ -44,6 +45,7 @@ app.use('/send', sendRouter);
 app.use('/messages', messagesRouter);
 app.use('/media', mediaRouter);
 app.use('/calls', callsRouter);
+app.use('/presence', presenceRouter);
 
 app.use((req, res) => {
   res.status(404).json({ error: 'NOT_FOUND', path: req.path });
