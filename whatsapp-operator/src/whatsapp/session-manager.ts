@@ -7,6 +7,7 @@ import { config } from '../config.js';
 import { clearPostgresAuthState, usePostgresAuthState } from './auth-state.js';
 import { updateAccount, listConnectableAccounts } from '../db/accounts.js';
 import { forwardEvent, forwardInboundMessage } from '../webhook/forward.js';
+import { recordMessageEvent, recordPresenceUpdate } from '../db/presence-intelligence.js';
 
 const logger = pino({ level: config.logLevel });
 const RECONNECT_DELAY_MS = 5_000;
@@ -367,7 +368,14 @@ async function startSessionInternal(waAccountId: string): Promise<void> {
     if (type !== 'notify') return;
 
     for (const msg of messages) {
-      if (!msg.message || msg.key.fromMe) continue;
+      if (!msg.message) continue;
+
+      await recordMessageEvent(waAccountId, msg).catch((err) =>
+        logger.error({ err, waAccountId }, 'Failed to record WhatsApp message intelligence')
+      );
+
+      if (msg.key.fromMe) continue;
+
       await forwardInboundMessage(waAccountId, msg).catch((err) =>
         logger.error({ err, waAccountId }, 'Failed to forward inbound message to Brain app')
       );
@@ -399,6 +407,10 @@ async function startSessionInternal(waAccountId: string): Promise<void> {
   });
 
   sock.ev.on('presence.update', async (data) => {
+    await recordPresenceUpdate(waAccountId, data).catch((err) =>
+      logger.error({ err, waAccountId }, 'Failed to record WhatsApp presence intelligence')
+    );
+
     await forwardEvent(waAccountId, 'presence.update', data).catch((err) =>
       logger.error({ err, waAccountId }, 'Failed to forward presence event')
     );
