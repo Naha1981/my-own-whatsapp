@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, type Request } from 'express';
 import { asyncHandler } from '../middleware/async-handler.js';
 import { requireAccountAccess } from '../middleware/account-access.js';
 import {
@@ -33,7 +33,7 @@ function jidFromInput(value: unknown): string {
   return `${digits}@s.whatsapp.net`;
 }
 
-function tenantScope(req: Parameters<typeof requireAccountAccess>[0]) {
+function tenantScope(req: Request) {
   const scope = (req as typeof req & { tenantScope?: { appId: string; tenantId: string } }).tenantScope;
   if (!scope) throw new Error('TENANT_AUTH_REQUIRED');
   return scope;
