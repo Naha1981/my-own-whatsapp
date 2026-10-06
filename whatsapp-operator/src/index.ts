@@ -2,7 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import pino from 'pino';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath } from 'url';
 import { config } from './config.js';
 import { accountsRouter } from './routes/accounts.js';
 import { sendRouter } from './routes/send.js';
@@ -14,8 +14,8 @@ import { healthRouter } from './routes/health.js';
 import { mcpRouter } from './routes/mcp.js';
 import { pool } from './db/pool.js';
 import { initializeDatabase } from './db/init.js';
-import { createBinding, getAccount, listAccounts } from './db/accounts.js';
-import { restoreConnectableSessions, shutdownSession } from './whatsapp/session-manager.js';
+import { createAccount, createBinding, getAccount, listAccounts } from './db/accounts.js';
+import { restoreConnectableSessions, shutdownSession, startSession } from './whatsapp/session-manager.js';
 
 const logger = pino({ level: config.logLevel });
 const app = express();
@@ -70,13 +70,17 @@ async function reconcileBaronBinding(): Promise<void> {
     return;
   }
 
-  const account = await getAccount(config.baronWaAccountId);
+  let account = await getAccount(config.baronWaAccountId);
+  const created = !account;
+
   if (!account) {
-    logger.warn(
-      { waAccountId: config.baronWaAccountId },
-      'Baron binding reconciliation skipped — WhatsApp account does not exist',
+    // The Operator uses UUID primary keys internally. Create the stable
+    // application-facing alias once, then always resolve it to the UUID.
+    account = await createAccount(config.baronWaAccountId);
+    logger.info(
+      { waAccountId: account.id, label: config.baronWaAccountId },
+      'Created Baron WhatsApp account for stable account label',
     );
-    return;
   }
 
   await createBinding({
@@ -86,9 +90,19 @@ async function reconcileBaronBinding(): Promise<void> {
     webhookUrl: config.baronWebhookUrl,
   });
 
+  if (
+    created ||
+    (!account.is_connected &&
+      account.status !== 'connecting' &&
+      account.status !== 'qr_ready')
+  ) {
+    await startSession(account.id);
+  }
+
   logger.info(
     {
       waAccountId: account.id,
+      waAccountLabel: config.baronWaAccountId,
       appId: config.baronAppId,
       tenantId: config.baronTenantId,
       webhookUrl: config.baronWebhookUrl,
