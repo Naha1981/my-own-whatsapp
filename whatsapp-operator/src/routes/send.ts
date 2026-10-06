@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import type { WAMessage } from '@whiskeysockets/baileys';
+import { getAccount } from '../db/accounts.js';
 import { getSocket } from '../whatsapp/session-manager.js';
 import { requireAccountAccess } from '../middleware/account-access.js';
 
@@ -49,21 +50,25 @@ sendRouter.post('/', requireAccountAccess((req) => String(req.body?.waAccountId 
   }
 
   try {
+    const account = await getAccount(String(waAccountId));
+    if (!account) {
+      throw new Error(`WhatsApp account ${String(waAccountId)} does not exist`);
+    }
+
+    const sock = getSocket(account.id);
+    if (!sock) {
+      throw new Error(`No active WhatsApp session for account ${String(waAccountId)}. Has it been connected?`);
+    }
+
     const quote = quotedMessage(body.quotedMessage);
+    const jid = jidForRecipient(String(to));
 
     if (type === 'text') {
       const text = requiredString(body.text, 'text');
-      const jid = jidForRecipient(String(to));
-      const sock = getSocket(waAccountId);
-      if (!sock) throw new Error(`No active WhatsApp session for account ${waAccountId}. Has it been connected?`);
       const result = await sock.sendMessage(jid, { text }, quote ? { quoted: quote } : undefined);
       res.json({ ok: true, type: 'text', message: result });
       return;
     }
-
-    const sock = getSocket(waAccountId);
-    if (!sock) throw new Error(`No active WhatsApp session for account ${waAccountId}. Has it been connected?`);
-    const jid = jidForRecipient(String(to));
 
     const content = (() => {
       switch (type) {
