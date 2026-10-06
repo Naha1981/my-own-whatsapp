@@ -36,4 +36,10 @@ export const config = {
   mcpOauthPassword: process.env.MCP_OAUTH_PASSWORD ?? '',
   mcpAppId: process.env.MCP_APP_ID ?? 'nahalabs',
   mcpTenantId: process.env.MCP_TENANT_ID ?? 'default',
+
+  // Baron-only webhook binding reconciliation.
+  baronWaAccountId: process.env.BARON_WA_ACCOUNT_ID ?? '',
+  baronAppId: process.env.BARON_APP_ID ?? '',
+  baronTenantId: process.env.BARON_TENANT_ID ?? '',
+  baronWebhookUrl: process.env.BARON_WEBHOOK_URL ?? '',
 };
