@@ -49,10 +49,6 @@ export async function getTenantScopeByTokenHash(tokenHash: string): Promise<{ ap
   return { appId: rows[0].app_id, tenantId: rows[0].tenant_id };
 }
 
-/**
- * Issue a tenant-scoped credential. The plaintext value is returned only
- * when a credential is first created or deliberately rotated.
- */
 export async function issueTenantCredential(
   appId: string,
   tenantId: string,
@@ -103,8 +99,21 @@ export async function createAccount(label?: string): Promise<WaAccount> {
   return rows[0];
 }
 
-export async function getAccount(id: string): Promise<WaAccount | null> {
-  const { rows } = await pool.query<WaAccount>(`SELECT * FROM wa_accounts WHERE id = $1`, [id]);
+/**
+ * Resolve a WhatsApp account by its UUID or by its stable human-readable label.
+ * This lets shared NahaLabs applications use aliases such as "baron-main"
+ * without changing the underlying UUID primary key.
+ */
+export async function getAccount(identifier: string): Promise<WaAccount | null> {
+  const { rows } = await pool.query<WaAccount>(
+    `SELECT *
+       FROM wa_accounts
+      WHERE id::text = $1
+         OR label = $1
+      ORDER BY CASE WHEN id::text = $1 THEN 0 ELSE 1 END
+      LIMIT 1`,
+    [identifier]
+  );
   return rows[0] ?? null;
 }
 
@@ -157,7 +166,11 @@ export async function createBinding(params: {
 
 export async function getActiveBindings(waAccountId: string): Promise<WaBinding[]> {
   const { rows } = await pool.query<WaBinding>(
-    `SELECT * FROM wa_account_bindings WHERE wa_account_id = $1 AND is_active = TRUE`,
+    `SELECT b.*
+       FROM wa_account_bindings b
+       INNER JOIN wa_accounts a ON a.id = b.wa_account_id
+      WHERE (a.id::text = $1 OR a.label = $1)
+        AND b.is_active = TRUE`,
     [waAccountId]
   );
   return rows;
