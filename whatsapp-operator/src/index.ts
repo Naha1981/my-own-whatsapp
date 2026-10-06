@@ -14,7 +14,7 @@ import { healthRouter } from './routes/health.js';
 import { mcpRouter } from './routes/mcp.js';
 import { pool } from './db/pool.js';
 import { initializeDatabase } from './db/init.js';
-import { listAccounts } from './db/accounts.js';
+import { createBinding, getAccount, listAccounts } from './db/accounts.js';
 import { restoreConnectableSessions, shutdownSession } from './whatsapp/session-manager.js';
 
 const logger = pino({ level: config.logLevel });
@@ -57,11 +57,52 @@ app.use((err: unknown, _req: express.Request, res: express.Response, _next: expr
   res.status(500).json({ error: 'INTERNAL_ERROR' });
 });
 
+async function reconcileBaronBinding(): Promise<void> {
+  const configured = Boolean(
+    config.baronWaAccountId &&
+    config.baronAppId &&
+    config.baronTenantId &&
+    config.baronWebhookUrl,
+  );
+
+  if (!configured) {
+    logger.info('Baron binding reconciliation disabled — BARON_* variables are not fully configured');
+    return;
+  }
+
+  const account = await getAccount(config.baronWaAccountId);
+  if (!account) {
+    logger.warn(
+      { waAccountId: config.baronWaAccountId },
+      'Baron binding reconciliation skipped — WhatsApp account does not exist',
+    );
+    return;
+  }
+
+  await createBinding({
+    waAccountId: account.id,
+    appId: config.baronAppId,
+    tenantId: config.baronTenantId,
+    webhookUrl: config.baronWebhookUrl,
+  });
+
+  logger.info(
+    {
+      waAccountId: account.id,
+      appId: config.baronAppId,
+      tenantId: config.baronTenantId,
+      webhookUrl: config.baronWebhookUrl,
+    },
+    'Baron WhatsApp webhook binding reconciled',
+  );
+}
+
 async function main(): Promise<void> {
   // Bring fresh or upgraded databases to the expected schema automatically.
   // The schema itself is idempotent, so this is safe on every deployment.
   await initializeDatabase();
   logger.info('NahaLabs WhatsApp Operator database schema is ready');
+  await reconcileBaronBinding();
 
   const server = app.listen(config.port, async () => {
     logger.info(`NahaLabs WhatsApp Operator listening on port ${config.port}`);
