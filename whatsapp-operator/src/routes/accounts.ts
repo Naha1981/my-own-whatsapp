@@ -11,7 +11,7 @@ import {
 import { asyncHandler } from '../middleware/async-handler.js';
 import { requireAccountAccess, requireTenantScope } from '../middleware/account-access.js';
 import { requireApiKey } from '../middleware/auth.js';
-import { getPairingCode, requestPairingCode, resetSession, startSession, stopSession } from '../whatsapp/session-manager.js';
+import { getPairingCode, requestPairingCode, resetSession, shutdownSession, startSession, stopSession } from '../whatsapp/session-manager.js';
 
 export const accountsRouter = Router();
 
@@ -223,6 +223,18 @@ accountsRouter.post('/:id/connect', requireAccountAccess((req) => req.params.id)
     res.status(404).json({ error: 'NOT_FOUND' });
     return;
   }
+
+  // QR expiry clears the stored QR but intentionally leaves the socket alive.
+  // Restart only an unconnected, expired pairing socket so "refresh QR" works
+  // without logging out or deleting saved credentials for already-linked devices.
+  const qrExpired =
+    account.status === 'qr_expired' ||
+    Boolean(account.qr_expires_at && new Date(String(account.qr_expires_at)).getTime() <= Date.now());
+
+  if (!account.is_connected && qrExpired) {
+    await shutdownSession(account.id);
+  }
+
   await startSession(account.id);
   res.json({ waAccountId: account.id, status: 'connecting' });
 }));
