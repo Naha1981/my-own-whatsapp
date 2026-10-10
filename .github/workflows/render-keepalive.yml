@@ -1,7 +1,7 @@
 name: Render keepalive
 
 on:
-  # Also run after changes so a freshly deployed Operator gets an immediate
+  # Also run after changes so a freshly deployed service gets an immediate
   # reachability check instead of waiting for the next scheduled heartbeat.
   push:
     branches: [main]
@@ -16,45 +16,63 @@ permissions:
 jobs:
   ping-render:
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 5
+    env:
+      # Not sensitive: the concierge is a public onrender URL.
+      RENDER_CONCIERGE_URL: https://nahalabs-restaurant-concierge.onrender.com
     steps:
-      - name: Ping Render operator
+      - name: Ping Render services (operator + concierge)
         env:
           RENDER_OPERATOR_URL: ${{ secrets.RENDER_OPERATOR_URL }}
         shell: bash
         run: |
           set -euo pipefail
 
-          if [[ -z "${RENDER_OPERATOR_URL:-}" ]]; then
-            echo "ERROR: repository secret RENDER_OPERATOR_URL is not configured."
-            exit 1
-          fi
+          ping() {
+            local name="$1" raw_url="$2"
+            # Tolerate stray whitespace/newlines and a missing scheme in the
+            # configured URL - a malformed value here previously failed every
+            # run with curl: (3) URL rejected.
+            local url
+            url="$(printf '%s' "${raw_url}" | tr -d '[:space:]')"
+            if [[ -z "${url}" ]]; then
+              echo "ERROR: ${name} URL is not configured."
+              return 1
+            fi
+            if [[ "${url}" != http://* && "${url}" != https://* ]]; then
+              url="https://${url}"
+            fi
+            url="${url%/}/health?keepalive=$(date +%s)"
+            echo "[keepalive] ${name}: GET ${url}"
 
-          url="${RENDER_OPERATOR_URL%/}/health?keepalive=$(date +%s)"
-          echo "[keepalive] GET ${url}"
+            # Render may take a moment to wake after sleeping. Retry connection
+            # failures and transient HTTP failures.
+            response="$(curl --silent --show-error --location \
+              --retry 5 \
+              --retry-delay 5 \
+              --retry-max-time 150 \
+              --connect-timeout 20 \
+              --max-time 60 \
+              --write-out '\n%{http_code}' \
+              -H 'Cache-Control: no-cache' \
+              -H 'Pragma: no-cache' \
+              "${url}")"
 
-          # Render may take a moment to wake after sleeping. Retry connection
-          # failures and transient HTTP failures without cancelling another run.
-          response="$(curl --silent --show-error --location \
-            --retry 5 \
-            --retry-delay 5 \
-            --retry-max-time 150 \
-            --connect-timeout 20 \
-            --max-time 60 \
-            --write-out '\n%{http_code}' \
-            -H 'Cache-Control: no-cache' \
-            -H 'Pragma: no-cache' \
-            "${url}")"
+            http_code="${response##*$'\n'}"
+            body="${response%$'\n'*}"
 
-          http_code="${response##*$'\n'}"
-          body="${response%$'\n'*}"
+            echo "[keepalive] ${name}: HTTP ${http_code}"
+            echo "${body}"
 
-          echo "[keepalive] HTTP ${http_code}"
-          echo "${body}"
+            if [[ "${http_code}" -lt 200 || "${http_code}" -ge 400 ]]; then
+              echo "ERROR: ${name} health endpoint returned HTTP ${http_code}."
+              return 1
+            fi
 
-          if [[ "${http_code}" -lt 200 || "${http_code}" -ge 400 ]]; then
-            echo "ERROR: Render health endpoint returned HTTP ${http_code}."
-            exit 1
-          fi
+            echo "[keepalive] ${name} is reachable"
+          }
 
-          echo "[keepalive] Render operator is reachable"
+          failed=0
+          ping "operator" "${RENDER_OPERATOR_URL:-}" || failed=1
+          ping "concierge" "${RENDER_CONCIERGE_URL}" || failed=1
+          exit "${failed}"
