@@ -18,6 +18,9 @@ const QR_SIZE_PX = 512;
 const PAIRING_READY_TIMEOUT_MS = 15_000;
 
 const sockets = new Map<string, WASocket>();
+// Message ids sent by the operator itself, per account - used to skip our own
+// fromMe echoes when letting the owner's self-chat messages through below.
+const operatorSentIds = new Map<string, Set<string>>();
 const startingSessions = new Map<string, Promise<void>>();
 const stopping = new Set<string>();
 const qrExpiryTimers = new Map<string, NodeJS.Timeout>();
@@ -235,6 +238,27 @@ async function startSessionInternal(waAccountId: string): Promise<void> {
 
   sockets.set(waAccountId, sock);
 
+  // Track messages sent through this socket so their fromMe echo can be told
+  // apart from texts the owner types into their own self-chat (demo/testing).
+  const originalSendMessage = sock.sendMessage.bind(sock);
+  (sock as { sendMessage: unknown }).sendMessage = (async (...args: unknown[]) => {
+    const result = await originalSendMessage(...(args as Parameters<typeof originalSendMessage>));
+    const sentId = (result as { key?: { id?: string } } | undefined)?.key?.id;
+    if (sentId) {
+      let sent = operatorSentIds.get(waAccountId);
+      if (!sent) {
+        sent = new Set<string>();
+        operatorSentIds.set(waAccountId, sent);
+      }
+      sent.add(sentId);
+      if (sent.size > 500) {
+        const oldest = sent.values().next().value;
+        if (oldest !== undefined) sent.delete(oldest);
+      }
+    }
+    return result;
+  }) as typeof sock.sendMessage;
+
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
 
@@ -374,7 +398,17 @@ async function startSessionInternal(waAccountId: string): Promise<void> {
         logger.error({ err, waAccountId }, 'Failed to record WhatsApp message intelligence')
       );
 
-      if (msg.key.fromMe) continue;
+      if (msg.key.fromMe) {
+        // Self-chat exception: texts the owner sends to their OWN number are
+        // forwarded like any inbound customer message, so a business owner can
+        // demo the connected app by messaging themselves. Everything else that
+        // is fromMe (texts to real contacts) is still ignored, and messages the
+        // operator itself sent are skipped to prevent a reply loop.
+        const selfId = (sock.user?.id ?? '').split(':')[0];
+        const isSelfChat = Boolean(selfId) && msg.key.remoteJid === `${selfId}@s.whatsapp.net`;
+        const sentByOperator = Boolean(msg.key.id) && (operatorSentIds.get(waAccountId)?.has(msg.key.id as string) ?? false);
+        if (!isSelfChat || sentByOperator) continue;
+      }
 
       await forwardInboundMessage(waAccountId, msg).catch((err) =>
         logger.error({ err, waAccountId }, 'Failed to forward inbound message to Brain app')
