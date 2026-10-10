@@ -1,26 +1,79 @@
 {
   "branchId": "soweto-test",
   "displayName": "Soweto Test Kitchen",
-  "mode": "test",
+  "mode": "live",
   "appId": "restaurant-concierge",
   "tenantId": "soweto-test",
   "waAccountId": "04cf2130-92bc-4cb1-acea-dbbb8ab57a7f",
   "menu": [
-    { "name": "Kota (quarter)", "price": "R45", "description": "Chips, polony, cheese, atchar, egg", "tags": ["kota", "spatlo"] },
-    { "name": "Full house kota", "price": "R75", "description": "Everything on it", "tags": ["kota"] },
-    { "name": "Chicken wings (6)", "price": "R55", "tags": ["grill"] },
-    { "name": "Beef burger", "price": "R60", "tags": ["burger"] },
-    { "name": "Chips (large)", "price": "R30", "tags": ["sides"] },
-    { "name": "Soft drink (can)", "price": "R15", "tags": ["drinks"] }
+    {
+      "name": "Kota (quarter)",
+      "price": "R45",
+      "description": "Chips, polony, cheese, atchar, egg",
+      "tags": [
+        "kota",
+        "spatlo"
+      ]
+    },
+    {
+      "name": "Full house kota",
+      "price": "R75",
+      "description": "Everything on it",
+      "tags": [
+        "kota"
+      ]
+    },
+    {
+      "name": "Chicken wings (6)",
+      "price": "R55",
+      "tags": [
+        "grill"
+      ]
+    },
+    {
+      "name": "Beef burger",
+      "price": "R60",
+      "tags": [
+        "burger"
+      ]
+    },
+    {
+      "name": "Chips (large)",
+      "price": "R30",
+      "tags": [
+        "sides"
+      ]
+    },
+    {
+      "name": "Soft drink (can)",
+      "price": "R15",
+      "tags": [
+        "drinks"
+      ]
+    }
   ],
   "tradingHours": {
-    "mon": ["09:00-20:00"],
-    "tue": ["09:00-20:00"],
-    "wed": ["09:00-20:00"],
-    "thu": ["09:00-20:00"],
-    "fri": ["09:00-22:00"],
-    "sat": ["09:00-22:00"],
-    "sun": ["10:00-18:00"]
+    "mon": [
+      "09:00-20:00"
+    ],
+    "tue": [
+      "09:00-20:00"
+    ],
+    "wed": [
+      "09:00-20:00"
+    ],
+    "thu": [
+      "09:00-20:00"
+    ],
+    "fri": [
+      "09:00-22:00"
+    ],
+    "sat": [
+      "09:00-22:00"
+    ],
+    "sun": [
+      "10:00-18:00"
+    ]
   },
   "bookingRules": {
     "maxPartySize": 8,
