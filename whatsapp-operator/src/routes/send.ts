@@ -7,7 +7,7 @@ import { requireAccountAccess } from '../middleware/account-access.js';
 export const sendRouter = Router();
 
 function jidForRecipient(value: string): string {
-  if (value.includes('@s.whatsapp.net') || value.includes('@g.us')) return value;
+  if (value.includes('@s.whatsapp.net') || value.includes('@g.us') || value.includes('@lid')) return value;
   const digits = value.replace(/\D/g, '');
   if (!/^\d{5,20}$/.test(digits)) throw new Error('Recipient must contain a valid WhatsApp phone number');
   return `${digits}@s.whatsapp.net`;
