@@ -32,11 +32,13 @@ function isCustomerChat(chatId: string | null): boolean {
   if (!chatId) return false;
   if (chatId === 'status@broadcast') return false;
   if (chatId.endsWith('@g.us')) return false; // group chats are not concierge customers
-  return chatId.endsWith('@s.whatsapp.net');
+  // @s.whatsapp.net is a classic phone JID; @lid is WhatsApp's newer privacy ID -
+  // both are 1:1 customer chats.
+  return chatId.endsWith('@s.whatsapp.net') || chatId.endsWith('@lid');
 }
 
 export function customerPhoneFrom(chatId: string): string {
-  return `+${chatId.replace(/@s\.whatsapp\.net$/, '')}`;
+  return `+${chatId.replace(/@(s\.whatsapp\.net|lid)$/, '')}`;
 }
 
 /** Shared ingest path used by the real webhook AND the test simulator. */
@@ -110,7 +112,9 @@ export function webhookRouter(branches: Map<string, BranchConfig>, store: Store)
 
       const result = await ingestInbound(store, branch, {
         waMessageId: data.messageId,
-        customerPhone: customerPhoneFrom(data.chatId as string),
+        // LID customers keep their full JID as the key so replies route back to the
+        // @lid address; classic phone JIDs become "+2782..." as before.
+        customerPhone: (data.chatId as string).endsWith('@lid') ? (data.chatId as string) : customerPhoneFrom(data.chatId as string),
         pushName: data.pushName,
         text: data.text,
         messageType: data.messageType,
