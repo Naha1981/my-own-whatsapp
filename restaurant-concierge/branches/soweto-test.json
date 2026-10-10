@@ -1,7 +1,7 @@
 {
   "branchId": "soweto-test",
   "displayName": "Soweto Test Kitchen",
-  "mode": "live",
+  "mode": "test",
   "appId": "restaurant-concierge",
   "tenantId": "soweto-test",
   "waAccountId": "04cf2130-92bc-4cb1-acea-dbbb8ab57a7f",
