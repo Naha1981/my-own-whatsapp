@@ -1,0 +1,38 @@
+{
+  "branchId": "baron-woodmead",
+  "displayName": "The Baron Woodmead",
+  "mode": "test",
+  "appId": "restaurant-concierge",
+  "tenantId": "baron-woodmead",
+  "waAccountId": null,
+  "menu": [
+    { "name": "Example dish", "price": "R120", "description": "What it is", "tags": ["mains"] }
+  ],
+  "tradingHours": {
+    "mon": ["11:00-22:00"],
+    "tue": ["11:00-22:00"],
+    "wed": ["11:00-22:00"],
+    "thu": ["11:00-22:00"],
+    "fri": ["11:00-23:00"],
+    "sat": ["10:00-23:00"],
+    "sun": ["10:00-21:00"]
+  },
+  "bookingRules": {
+    "maxPartySize": 10,
+    "advanceDays": 30,
+    "slotMinutes": 90,
+    "requiresDeposit": false,
+    "notes": "e.g. no bookings after 20:30 on Fridays"
+  },
+  "escalation": {
+    "name": "Branch manager name",
+    "phone": "+27...",
+    "notes": "When to escalate: complaints, big group bookings, press"
+  },
+  "voice": {
+    "tone": "e.g. upmarket but warm",
+    "language": "English",
+    "signoff": "e.g. — The Baron Woodmead",
+    "notes": "Anything the agent should know about how this venue talks"
+  }
+}

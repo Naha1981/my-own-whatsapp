@@ -25,3 +25,38 @@ services:
         sync: false
       - key: ALLOW_LEGACY_TENANT_HEADERS
         value: "true"
+  # Restaurant Concierge — per-branch booking/host service. Receives signed
+  # webhooks from the Operator, stores conversations, notifies the AI agent,
+  # and relays agent replies back through the Operator. Shares the Operator's
+  # Postgres (rc_* tables only); reuse the same DATABASE_URL value here.
+  - type: web
+    name: nahalabs-restaurant-concierge
+    runtime: docker
+    rootDir: restaurant-concierge
+    plan: free
+    autoDeploy: true
+    healthCheckPath: /health
+    maxShutdownDelaySeconds: 30
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "3002"
+      - key: DATABASE_URL
+        sync: false
+      - key: WEBHOOK_SECRET
+        sync: false
+      - key: OPERATOR_API_KEY
+        sync: false
+      - key: OPERATOR_BASE_URL
+        value: "https://my-own-whatsapp-2z5h.onrender.com"
+      - key: CONCIERGE_API_KEY
+        sync: false
+      - key: CONCIERGE_PUBLIC_URL
+        sync: false
+      - key: NOTIFIER
+        value: "none"
+      - key: RESEND_API_KEY
+        sync: false
+      - key: NOTIFY_TO
+        sync: false
