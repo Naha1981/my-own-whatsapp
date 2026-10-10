@@ -403,11 +403,19 @@ async function startSessionInternal(waAccountId: string): Promise<void> {
         // forwarded like any inbound customer message, so a business owner can
         // demo the connected app by messaging themselves. Everything else that
         // is fromMe (texts to real contacts) is still ignored, and messages the
-        // operator itself sent are skipped to prevent a reply loop.
+        // operator itself sent are skipped to prevent a reply loop. The clone
+        // clears fromMe so downstream apps treat it as a customer DM (their
+        // own fromMe guards would drop it too); from the business number's
+        // perspective a self-chat text IS an inbound message.
         const selfId = (sock.user?.id ?? '').split(':')[0];
         const isSelfChat = Boolean(selfId) && msg.key.remoteJid === `${selfId}@s.whatsapp.net`;
         const sentByOperator = Boolean(msg.key.id) && (operatorSentIds.get(waAccountId)?.has(msg.key.id as string) ?? false);
         if (!isSelfChat || sentByOperator) continue;
+        const demoMessage = { ...msg, key: { ...msg.key, fromMe: false } };
+        await forwardInboundMessage(waAccountId, demoMessage).catch((err) =>
+          logger.error({ err, waAccountId }, 'Failed to forward self-chat demo message to Brain app')
+        );
+        continue;
       }
 
       await forwardInboundMessage(waAccountId, msg).catch((err) =>
