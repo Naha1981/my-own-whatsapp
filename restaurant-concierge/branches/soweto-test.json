@@ -4,7 +4,7 @@
   "mode": "test",
   "appId": "restaurant-concierge",
   "tenantId": "soweto-test",
-  "waAccountId": null,
+  "waAccountId": "04cf2130-92bc-4cb1-acea-dbbb8ab57a7f",
   "menu": [
     { "name": "Kota (quarter)", "price": "R45", "description": "Chips, polony, cheese, atchar, egg", "tags": ["kota", "spatlo"] },
     { "name": "Full house kota", "price": "R75", "description": "Everything on it", "tags": ["kota"] },
