@@ -7,6 +7,7 @@ import { config } from '../config.js';
 import { clearPostgresAuthState, usePostgresAuthState } from './auth-state.js';
 import { updateAccount, listConnectableAccounts } from '../db/accounts.js';
 import { forwardEvent, forwardInboundMessage } from '../webhook/forward.js';
+import { maybeSendNmjDemoReply } from '../demo/never-miss-a-job.js';
 import { recordMessageEvent, recordPresenceUpdate } from '../db/presence-intelligence.js';
 
 const logger = pino({ level: config.logLevel });
@@ -420,6 +421,10 @@ async function startSessionInternal(waAccountId: string): Promise<void> {
 
       await forwardInboundMessage(waAccountId, msg).catch((err) =>
         logger.error({ err, waAccountId }, 'Failed to forward inbound message to Brain app')
+      );
+
+      await maybeSendNmjDemoReply(sock, waAccountId, msg.key.remoteJid, logger).catch((err) =>
+        logger.error({ err, waAccountId }, 'NMJ demo auto-reply failed')
       );
     }
   });
