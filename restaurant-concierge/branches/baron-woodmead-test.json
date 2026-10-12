@@ -194,7 +194,7 @@
     {
       "name": "Red Bull cocktails special",
       "price": "2 for R110",
-      "description": "Listed on Dineplan until 30 Sep 2026 - likely expired, confirm before using",
+      "description": "UNVERIFIED - listed until 30 Sep 2026, likely expired; do not offer",
       "tags": [
         "drinks",
         "unverified"
@@ -229,7 +229,7 @@
     "advanceDays": 30,
     "slotMinutes": 90,
     "requiresDeposit": false,
-    "notes": "PLACEHOLDER - Gareth to confirm real booking rules. Address: Dunwoody Shopping Centre, 147 Western Service Rd, Woodmead, Sandton. Phone 011 804 1618. Email woodmead@thebaron.co.za. Takeaways ordered via the website."
+    "notes": "UNCONFIRMED placeholders: party size, notice and deposit rules not yet confirmed by the restaurant. Address: Dunwoody Shopping Centre, 147 Western Service Rd, Woodmead, Sandton. Phone 011 804 1618. Takeaways ordered via the website."
   },
   "escalation": {
     "name": "Gareth",
@@ -240,6 +240,6 @@
     "tone": "relaxed, welcoming, a little upmarket gastropub",
     "language": "English",
     "signoff": "- The Baron Woodmead",
-    "notes": "Since 1993. Short messages. Prices are from-prices copied from a delivery listing; say 'from' and confirm with the restaurant for exact options. Never promise a table or dish unless confirmed."
+    "notes": "Since 1993. Short messages. ALL PRICES ARE DELIVERY-APP (Mr D) ESTIMATES, not confirmed dine-in prices: always say 'around' or 'from' and that the restaurant confirms the final price. Never promise a table or dish unless confirmed."
   }
 }
