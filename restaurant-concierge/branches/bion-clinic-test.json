@@ -1,0 +1,152 @@
+{
+  "branchId": "bion-clinic-test",
+  "displayName": "Bion Clinic (Dr Nathan Vermaak)",
+  "mode": "test",
+  "appId": "restaurant-concierge",
+  "tenantId": "bion-clinic-test",
+  "waAccountId": null,
+  "menu": [
+    {
+      "name": "Check-up and clean (exam + scale & polish)",
+      "price": "R2525",
+      "description": "Quoted by reception on 12 Oct 2026, weekdays only",
+      "tags": [
+        "general",
+        "quoted-by-reception"
+      ]
+    },
+    {
+      "name": "General check-up (adults and kids)",
+      "price": "from R650",
+      "description": "Routine exam and oral health review, gum evaluation, cavity screening, bite assessment",
+      "tags": [
+        "general"
+      ]
+    },
+    {
+      "name": "White fillings",
+      "price": "from R1200",
+      "tags": [
+        "general"
+      ]
+    },
+    {
+      "name": "Root canal (endodontic therapy)",
+      "price": "from R5500 per tooth",
+      "tags": [
+        "general"
+      ]
+    },
+    {
+      "name": "Scale & polish",
+      "price": "see check-up and clean",
+      "description": "Website lists no separate price",
+      "tags": [
+        "general"
+      ]
+    },
+    {
+      "name": "Crowns / full coverage restoration",
+      "price": "quote after consult",
+      "tags": [
+        "general"
+      ]
+    },
+    {
+      "name": "Extractions (simple and surgical)",
+      "price": "quote after consult",
+      "tags": [
+        "general"
+      ]
+    },
+    {
+      "name": "Cosmetic consultation",
+      "price": "from R2500",
+      "description": "Full dental exam and aesthetic planning",
+      "tags": [
+        "cosmetic"
+      ]
+    },
+    {
+      "name": "Professional whitening",
+      "price": "from R3500",
+      "description": "In-chair and at-home kits",
+      "tags": [
+        "cosmetic"
+      ]
+    },
+    {
+      "name": "Direct bonding",
+      "price": "from R1200 per tooth",
+      "tags": [
+        "cosmetic"
+      ]
+    },
+    {
+      "name": "Lab-crafted bonding",
+      "price": "from R4200 per tooth",
+      "description": "Usually 6 teeth, canine to canine",
+      "tags": [
+        "cosmetic"
+      ]
+    },
+    {
+      "name": "Smile Club Premium Veneers",
+      "price": "R16000 per porcelain veneer or crown",
+      "description": "6 teeth R96,000; 10 teeth R140,000; 18 teeth R235,000; 20 teeth R248,000",
+      "tags": [
+        "cosmetic"
+      ]
+    },
+    {
+      "name": "Active Aligners",
+      "price": "from R38000",
+      "description": "Complex cases slightly more",
+      "tags": [
+        "cosmetic"
+      ]
+    },
+    {
+      "name": "Dental implant (includes crown)",
+      "price": "from R16000 per tooth",
+      "tags": [
+        "cosmetic"
+      ]
+    }
+  ],
+  "tradingHours": {
+    "mon": [
+      "08:00-16:30"
+    ],
+    "tue": [
+      "08:00-16:30"
+    ],
+    "wed": [
+      "08:00-16:30"
+    ],
+    "thu": [
+      "08:00-16:30"
+    ],
+    "fri": [
+      "08:00-16:30"
+    ]
+  },
+  "bookingRules": {
+    "maxPartySize": 1,
+    "advanceDays": 60,
+    "slotMinutes": 60,
+    "requiresDeposit": false,
+    "notes": "Appointments only, weekdays. Website lists Mon, Tue, Thu, Fri (Wednesday not listed) - PLACEHOLDER Wednesday hours, confirm. Take name, mobile number, treatment wanted and 2 preferred weekday times; reception confirms the slot - never confirm a booking yourself. Address: Melrose Arch Medical Suites, 18 The High Street, Melrose Arch. Reception: 011 684 1135, WhatsApp 064 528 2381, info@nvdentistry.co.za."
+  },
+  "escalation": {
+    "name": "Reception",
+    "phone": "",
+    "notes": "UNKNOWN - staff WhatsApp number to escalate to. Escalate: pain, swelling, bleeding, trauma, medical questions, complaints, medical aid queries, price negotiation."
+  },
+  "voice": {
+    "tone": "calm, professional, warm",
+    "language": "English",
+    "signoff": "- Bion Clinic",
+    "notes": "Dental practice. Never diagnose or give clinical advice. Prices are from-prices; final quote after consultation. For emergencies tell the patient to call reception or go to casualty. Do not discuss other patients. Confirm only what is in this config."
+  }
+}
