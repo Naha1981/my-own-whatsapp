@@ -4,37 +4,225 @@
   "mode": "test",
   "appId": "restaurant-concierge",
   "tenantId": "baron-woodmead-test",
-  "waAccountId": null,
+  "waAccountId": "1d25f070-0253-4e2f-9f44-2729e5b2bec1",
   "menu": [
-    {"name": "Baron's Burger", "price": "from R173", "description": "200g pure beef burger, flame-grilled, chips and onion rings", "tags": ["burger"]},
-    {"name": "Chicken Burger", "price": "from R168.80", "description": "Flame-grilled chicken breast, lemon butter garlic or peri-peri, chips", "tags": ["burger"]},
-    {"name": "Baron's Steak Roll", "price": "from R198.80", "description": "150g aged sirloin, chips", "tags": ["rolls"]},
-    {"name": "Baron's Rump", "price": "from R238", "description": "Slow-cooked rump, side of choice", "tags": ["grill"]},
-    {"name": "Baron's Fillet 250g", "price": "from R382", "tags": ["grill"]},
-    {"name": "Rib Eye 300g", "price": "from R413", "tags": ["grill"]},
-    {"name": "Tomahawk 550g", "price": "from R498", "description": "Aged rib eye on the bone", "tags": ["grill"]},
-    {"name": "Beef Espetada 450g", "price": "from R363", "description": "Rump cubes on the skewer, garlic butter", "tags": ["grill", "popular"]},
-    {"name": "Chicken Espetada", "price": "from R272", "description": "Deboned thighs, sweet chilli basting, garlic butter", "tags": ["grill", "popular"]},
-    {"name": "Half Spatchcock Chicken", "price": "from R181.30", "description": "Lemon & herb or peri-peri, chips", "tags": ["chicken"]},
-    {"name": "Spatchcock Chicken", "price": "from R268.80", "description": "Whole, lemon & herb or peri-peri, chips", "tags": ["chicken", "popular"]},
-    {"name": "Parmesan-Crusted Chicken Breasts", "price": "from R248", "description": "Honey mustard sauce, side salad", "tags": ["chicken", "popular"]},
-    {"name": "Liver & Onions", "price": "R157", "description": "Mash, bacon and gravy", "tags": ["mains", "popular"]},
-    {"name": "Calamari", "price": "from R269", "description": "Grilled (lemon butter or peri-peri garlic) or crumbed, with rice", "tags": ["seafood"]},
-    {"name": "Grilled Kingklip", "price": "from R331.30", "tags": ["seafood"]},
-    {"name": "Beef Trinchado", "price": "from R281.30", "description": "Portuguese-style, with pap or rice", "tags": ["mains"]},
-    {"name": "Pork Rib & Chicken Combo", "price": "from R373.80", "tags": ["combo"]},
-    {"name": "Barons Platter", "price": "from R400", "description": "Mini shwarmas, halloumi, viennas, crumbed chicken strips, sauces, chips", "tags": ["platter", "share"]},
-    {"name": "Slider Platter", "price": "from R293.80", "description": "Mini beef and chicken burgers, three sauces, chips", "tags": ["platter", "share"]},
-    {"name": "Calamari Starter", "price": "from R181.30", "tags": ["starter"]},
-    {"name": "Chicken Livers Starter", "price": "from R131.30", "description": "Creamy garlic peri-peri", "tags": ["starter"]},
-    {"name": "Greek Salad", "price": "from R138", "tags": ["salad"]},
-    {"name": "Kids Chicken Strips", "price": "from R112.50", "description": "Crumbed strips with chips", "tags": ["kids"]},
-    {"name": "Red Bull cocktails special", "price": "2 for R110", "description": "Listed on Dineplan until 30 Sep 2026 - likely expired, confirm before using", "tags": ["drinks", "unverified"]}
+    {
+      "name": "Baron's Burger",
+      "price": "from R173",
+      "description": "200g pure beef burger, flame-grilled, chips and onion rings",
+      "tags": [
+        "burger"
+      ]
+    },
+    {
+      "name": "Chicken Burger",
+      "price": "from R168.80",
+      "description": "Flame-grilled chicken breast, lemon butter garlic or peri-peri, chips",
+      "tags": [
+        "burger"
+      ]
+    },
+    {
+      "name": "Baron's Steak Roll",
+      "price": "from R198.80",
+      "description": "150g aged sirloin, chips",
+      "tags": [
+        "rolls"
+      ]
+    },
+    {
+      "name": "Baron's Rump",
+      "price": "from R238",
+      "description": "Slow-cooked rump, side of choice",
+      "tags": [
+        "grill"
+      ]
+    },
+    {
+      "name": "Baron's Fillet 250g",
+      "price": "from R382",
+      "tags": [
+        "grill"
+      ]
+    },
+    {
+      "name": "Rib Eye 300g",
+      "price": "from R413",
+      "tags": [
+        "grill"
+      ]
+    },
+    {
+      "name": "Tomahawk 550g",
+      "price": "from R498",
+      "description": "Aged rib eye on the bone",
+      "tags": [
+        "grill"
+      ]
+    },
+    {
+      "name": "Beef Espetada 450g",
+      "price": "from R363",
+      "description": "Rump cubes on the skewer, garlic butter",
+      "tags": [
+        "grill",
+        "popular"
+      ]
+    },
+    {
+      "name": "Chicken Espetada",
+      "price": "from R272",
+      "description": "Deboned thighs, sweet chilli basting, garlic butter",
+      "tags": [
+        "grill",
+        "popular"
+      ]
+    },
+    {
+      "name": "Half Spatchcock Chicken",
+      "price": "from R181.30",
+      "description": "Lemon & herb or peri-peri, chips",
+      "tags": [
+        "chicken"
+      ]
+    },
+    {
+      "name": "Spatchcock Chicken",
+      "price": "from R268.80",
+      "description": "Whole, lemon & herb or peri-peri, chips",
+      "tags": [
+        "chicken",
+        "popular"
+      ]
+    },
+    {
+      "name": "Parmesan-Crusted Chicken Breasts",
+      "price": "from R248",
+      "description": "Honey mustard sauce, side salad",
+      "tags": [
+        "chicken",
+        "popular"
+      ]
+    },
+    {
+      "name": "Liver & Onions",
+      "price": "R157",
+      "description": "Mash, bacon and gravy",
+      "tags": [
+        "mains",
+        "popular"
+      ]
+    },
+    {
+      "name": "Calamari",
+      "price": "from R269",
+      "description": "Grilled (lemon butter or peri-peri garlic) or crumbed, with rice",
+      "tags": [
+        "seafood"
+      ]
+    },
+    {
+      "name": "Grilled Kingklip",
+      "price": "from R331.30",
+      "tags": [
+        "seafood"
+      ]
+    },
+    {
+      "name": "Beef Trinchado",
+      "price": "from R281.30",
+      "description": "Portuguese-style, with pap or rice",
+      "tags": [
+        "mains"
+      ]
+    },
+    {
+      "name": "Pork Rib & Chicken Combo",
+      "price": "from R373.80",
+      "tags": [
+        "combo"
+      ]
+    },
+    {
+      "name": "Barons Platter",
+      "price": "from R400",
+      "description": "Mini shwarmas, halloumi, viennas, crumbed chicken strips, sauces, chips",
+      "tags": [
+        "platter",
+        "share"
+      ]
+    },
+    {
+      "name": "Slider Platter",
+      "price": "from R293.80",
+      "description": "Mini beef and chicken burgers, three sauces, chips",
+      "tags": [
+        "platter",
+        "share"
+      ]
+    },
+    {
+      "name": "Calamari Starter",
+      "price": "from R181.30",
+      "tags": [
+        "starter"
+      ]
+    },
+    {
+      "name": "Chicken Livers Starter",
+      "price": "from R131.30",
+      "description": "Creamy garlic peri-peri",
+      "tags": [
+        "starter"
+      ]
+    },
+    {
+      "name": "Greek Salad",
+      "price": "from R138",
+      "tags": [
+        "salad"
+      ]
+    },
+    {
+      "name": "Kids Chicken Strips",
+      "price": "from R112.50",
+      "description": "Crumbed strips with chips",
+      "tags": [
+        "kids"
+      ]
+    },
+    {
+      "name": "Red Bull cocktails special",
+      "price": "2 for R110",
+      "description": "Listed on Dineplan until 30 Sep 2026 - likely expired, confirm before using",
+      "tags": [
+        "drinks",
+        "unverified"
+      ]
+    }
   ],
   "tradingHours": {
-    "mon": ["07:30-23:00"], "tue": ["07:30-23:00"], "wed": ["07:30-23:00"],
-    "thu": ["07:30-23:00"], "fri": ["07:30-23:00"], "sat": ["07:30-23:00"],
-    "sun": ["07:30-19:00"]
+    "mon": [
+      "07:30-23:00"
+    ],
+    "tue": [
+      "07:30-23:00"
+    ],
+    "wed": [
+      "07:30-23:00"
+    ],
+    "thu": [
+      "07:30-23:00"
+    ],
+    "fri": [
+      "07:30-23:00"
+    ],
+    "sat": [
+      "07:30-23:00"
+    ],
+    "sun": [
+      "07:30-19:00"
+    ]
   },
   "bookingRules": {
     "maxPartySize": 10,
