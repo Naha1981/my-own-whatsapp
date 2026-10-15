@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'url';
 import { config } from './config.js';
 import { accountsRouter } from './routes/accounts.js';
+import { tenantSecretsRouter } from './routes/tenant-secrets.js';
 import { sendRouter } from './routes/send.js';
 import { messagesRouter } from './routes/messages.js';
 import { mediaRouter } from './routes/media.js';
@@ -41,6 +42,7 @@ app.get('/operator-console', (_req, res) => {
 
 // Everything below requires the shared Operator API key.
 app.use('/accounts', accountsRouter);
+app.use('/tenant-secrets', tenantSecretsRouter);
 app.use('/send', sendRouter);
 app.use('/messages', messagesRouter);
 app.use('/media', mediaRouter);

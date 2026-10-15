@@ -181,3 +181,20 @@ CREATE INDEX IF NOT EXISTS idx_presence_observations_report
 
 CREATE INDEX IF NOT EXISTS idx_message_events_report
   ON wa_message_events(app_id, tenant_id, wa_account_id, jid, occurred_at ASC);
+
+-- Per-tenant encrypted secrets (e.g. a client's own Gemini API key).
+-- Values are encrypted with pgcrypto pgp_sym_encrypt using a server-side
+-- passphrase from the TENANT_SECRETS_KEY environment variable; the plaintext
+-- never touches the database, logs, or this file. One row per secret name
+-- per app/tenant scope. Secrets are only readable over the platform-key
+-- internal routes (src/routes/tenant-secrets.ts) - never via tenant tokens.
+CREATE TABLE IF NOT EXISTS wa_tenant_secrets (
+  id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  app_id         TEXT NOT NULL,
+  tenant_id      TEXT NOT NULL,
+  name           TEXT NOT NULL,
+  value_encrypted BYTEA NOT NULL,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (app_id, tenant_id, name)
+);

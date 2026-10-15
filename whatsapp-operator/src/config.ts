@@ -19,6 +19,9 @@ export const config = {
   logLevel: process.env.LOG_LEVEL ?? 'info',
   databaseUrl: required('DATABASE_URL'),
   webhookSecret: required('WEBHOOK_SECRET'),
+  // Server-side passphrase for pgcrypto encryption of per-tenant secrets.
+  // Optional: the tenant-secrets routes refuse with 503 until it is set.
+  tenantSecretsKey: process.env.TENANT_SECRETS_KEY ?? '',
   operatorApiKey: required('OPERATOR_API_KEY'),
   // Temporary migration bridge for existing NahaLabs apps. New integrations
   // should use X-NahaLabs-Tenant-Token and can omit the platform API key.
