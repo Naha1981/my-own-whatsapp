@@ -27,6 +27,11 @@ async function main(): Promise<void> {
     return express.json({ limit: '1mb' })(req, res, next);
   });
 
+  // Service landing: this is an API-only backend, so say so instead of a bare 404.
+  app.get('/', (_req, res) => {
+    res.json({ service: 'NahaLabs Restaurant Concierge', status: 'running', health: '/health' });
+  });
+
   app.get('/health', async (_req, res) => {
     try {
       await db.pool.query('SELECT 1');
